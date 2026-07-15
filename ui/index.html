@@ -212,6 +212,10 @@
           <input type="checkbox" id="syncDesktop" />
           <label for="syncDesktop" style="margin:0">Rendre les skills disponibles dans Claude Desktop</label>
         </div>
+        <div class="field">
+          <button class="ghost" id="reloadDesktopBtn">↻ Recharger Claude Desktop</button>
+          <div class="hint">Redémarre Claude Desktop pour qu'il prenne en compte les nouveaux skills.</div>
+        </div>
       </div>
 
       <div class="card">
@@ -358,6 +362,12 @@
       });
       $("skillsBtn").addEventListener("click", () => invoke("open_skills", {}).catch(() => {}));
       $("logsBtn").addEventListener("click", () => invoke("open_logs").catch(() => {}));
+      $("reloadDesktopBtn").addEventListener("click", async () => {
+        try {
+          const msg = await invoke("reload_claude_desktop");
+          toast($("toast"), msg || "Claude Desktop rechargé");
+        } catch (e) { toast($("toast"), "Erreur : " + e, true); }
+      });
 
       // ----- Activation view -----
       $("activateBtn").addEventListener("click", async () => {

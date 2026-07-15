@@ -30,6 +30,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+sysinfo = "0.32"
 
 serde = { workspace = true }
 serde_json = { workspace = true }

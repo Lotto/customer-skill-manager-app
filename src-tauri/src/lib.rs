@@ -6,6 +6,7 @@
 
 mod app_paths;
 mod commands;
+mod desktop_control;
 mod logging;
 mod scheduler;
 mod state;
@@ -71,6 +72,7 @@ pub fn run() {
             commands::default_skill_dir,
             commands::pick_skill_dir,
             commands::open_skills,
+            commands::reload_claude_desktop,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

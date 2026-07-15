@@ -92,6 +92,14 @@ pub fn open_skills(app: AppHandle, path: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
+/// Kill and relaunch Claude Desktop (so it re-reads freshly published skills).
+#[tauri::command]
+pub async fn reload_claude_desktop() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(crate::desktop_control::reload)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Open a native folder picker and return the chosen path, or `None` if
 /// cancelled. Used by the UI to add a skills destination directory.
 #[tauri::command]
