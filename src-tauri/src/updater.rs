@@ -47,6 +47,21 @@ async fn do_check(app: &AppHandle) -> tauri_plugin_updater::Result<Option<String
     status.update_available = Some(version.clone());
     apply_status(app, status);
 
+    // If the user opted into automatic updates, install and restart now. This
+    // runs in the scheduler loop right after a sync completes (no sync in
+    // flight), so it never interrupts a skill write. Otherwise the update stays
+    // staged behind the tray's "restart to install" entry.
+    let auto = app
+        .state::<AppState>()
+        .config
+        .lock()
+        .unwrap()
+        .auto_apply_updates;
+    if auto {
+        tracing::info!("auto-apply enabled; installing update {version} and restarting");
+        apply_pending_update(app);
+    }
+
     Ok(Some(version))
 }
 

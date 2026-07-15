@@ -6,6 +6,11 @@ use std::time::Duration;
 /// Default sync interval when the user has not overridden it.
 pub const DEFAULT_INTERVAL_MINUTES: u64 = 30;
 
+/// Default backend endpoint, pre-filled on a fresh install so the customer only
+/// has to enter their license key.
+pub const DEFAULT_BACKEND_URL: &str =
+    "https://hikyqslxoakwubxzdejd.supabase.co/functions/v1/skill-resource";
+
 /// A named destination directory that skills can be installed into.
 ///
 /// The manifest refers to targets by name (e.g. `"global"` or `"acme-project"`);
@@ -37,7 +42,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            backend_url: String::new(),
+            backend_url: DEFAULT_BACKEND_URL.to_string(),
             license_key: String::new(),
             interval_minutes: DEFAULT_INTERVAL_MINUTES,
             log_level: "info".to_string(),
@@ -125,12 +130,22 @@ mod tests {
     #[test]
     fn activation_requires_both_fields() {
         let mut c = AppConfig {
-            license_key: "KEY".into(),
+            backend_url: String::new(),
+            license_key: String::new(),
             ..Default::default()
         };
         assert!(!c.is_activated());
+        c.license_key = "KEY".into();
+        assert!(!c.is_activated()); // backend still empty
         c.backend_url = "https://x".into();
         assert!(c.is_activated());
+    }
+
+    #[test]
+    fn default_prefills_backend_url() {
+        assert_eq!(AppConfig::default().backend_url, DEFAULT_BACKEND_URL);
+        // Pre-filled URL alone is not activation; a license is still required.
+        assert!(!AppConfig::default().is_activated());
     }
 
     #[test]
