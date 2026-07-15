@@ -1,0 +1,20 @@
+[workspace]
+members = ["crates/csm-core"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Lotto"]
+repository = "https://github.com/Lotto/customer-skill-manager-app"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "0.8"
+sha2 = "0.10"
+hex = "0.4"
+dirs = "5"
+tempfile = "3"

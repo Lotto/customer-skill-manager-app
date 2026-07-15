@@ -1,0 +1,27 @@
+# Rust / Cargo
+/target
+**/target
+Cargo.lock.orig
+
+# Node / frontend
+node_modules
+dist
+dist-ssr
+.vite
+
+# Tauri
+src-tauri/target
+src-tauri/gen
+
+# Signing keys — NEVER commit
+*.key
+*.key.pub
+.tauri/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea
+.vscode/*
+!.vscode/extensions.json
+*.log
