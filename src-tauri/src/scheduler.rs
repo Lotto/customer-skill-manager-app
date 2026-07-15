@@ -43,7 +43,18 @@ pub async fn run_once(app: &AppHandle) {
     let result = tauri::async_runtime::spawn_blocking(move || run_blocking(cfg, state_path)).await;
 
     let new_status = match result {
-        Ok(Ok(summary)) => summary_to_status(app, summary),
+        Ok(Ok(summary)) => {
+            // Refresh the skills list exposed to the UI (name + description only).
+            *state.skills.lock().unwrap() = summary
+                .skills
+                .iter()
+                .map(|(slug, description)| crate::state::SkillListItem {
+                    slug: slug.clone(),
+                    description: description.clone(),
+                })
+                .collect();
+            summary_to_status(app, summary)
+        }
         Ok(Err(e)) => {
             let license = e.is_license_error();
             tracing::warn!("sync failed: {e}");
@@ -78,6 +89,8 @@ struct SyncSummary {
     removed: usize,
     errors: usize,
     total: usize,
+    /// (slug, description) for every entitled skill, for the UI list.
+    skills: Vec<(String, String)>,
 }
 
 fn run_blocking(cfg: AppConfig, state_path: std::path::PathBuf) -> csm_core::Result<SyncSummary> {
@@ -107,11 +120,19 @@ fn run_blocking(cfg: AppConfig, state_path: std::path::PathBuf) -> csm_core::Res
         tracing::debug!("sync: already up to date");
     }
 
+    let skills = outcome
+        .manifest
+        .skills
+        .iter()
+        .map(|e| (e.slug.clone(), e.display_description().to_string()))
+        .collect();
+
     Ok(SyncSummary {
         installed: outcome.installed.len(),
         removed: outcome.removed.len(),
         errors: outcome.errors.len(),
         total,
+        skills,
     })
 }
 

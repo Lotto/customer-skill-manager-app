@@ -2,9 +2,18 @@ use crate::app_paths::AppPaths;
 use crate::status::AppStatus;
 use crate::tray::TrayHandles;
 use csm_core::config::AppConfig;
+use serde::Serialize;
 use std::sync::Mutex;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex as AsyncMutex;
+
+/// One entitled skill, as shown in the UI's skills list (name + description
+/// only — never the prompt body).
+#[derive(Debug, Clone, Serialize)]
+pub struct SkillListItem {
+    pub slug: String,
+    pub description: String,
+}
 
 /// A downloaded, verified update waiting for the user to restart. The bytes are
 /// fetched in the background; installation happens only on the user's action.
@@ -30,6 +39,8 @@ pub struct AppState {
     pub tray: Mutex<Option<TrayHandles>>,
     /// A staged update awaiting restart, if any.
     pub pending_update: Mutex<Option<PendingUpdate>>,
+    /// The latest entitled skills (name + description), refreshed each sync.
+    pub skills: Mutex<Vec<SkillListItem>>,
 }
 
 impl AppState {
@@ -42,6 +53,7 @@ impl AppState {
             trigger_tx,
             tray: Mutex::new(None),
             pending_update: Mutex::new(None),
+            skills: Mutex::new(Vec::new()),
         }
     }
 }

@@ -117,6 +117,18 @@
       }
       .dir-item .rm:hover { color: var(--err); }
       .dir-item .rm.open:hover { color: var(--brand); }
+
+      /* Tabs */
+      .tabs { display: flex; gap: 4px; padding: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 18px; }
+      .tab { flex: 1; background: transparent; color: var(--muted); border-radius: 7px; padding: 8px 12px; font-weight: 600; }
+      .tab:hover { color: var(--ink); filter: none; }
+      .tab.active { background: var(--brand); color: #fff; }
+
+      /* Skill list */
+      .skill-item { padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px; background: var(--field); }
+      .skill-item .name { font-weight: 650; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--brand); }
+      .skill-item .desc { color: var(--muted); font-size: 13px; margin-top: 4px; line-height: 1.45; }
+      .skill-empty { color: var(--muted); text-align: center; padding: 24px 0; }
     </style>
   </head>
   <body>
@@ -155,6 +167,12 @@
         </div>
       </div>
 
+      <div class="tabs">
+        <button class="tab active" data-tab="config">Configuration</button>
+        <button class="tab" data-tab="skills">Skills</button>
+      </div>
+
+      <div id="viewConfig">
       <div class="card">
         <h2>Licence</h2>
         <div class="field">
@@ -210,6 +228,14 @@
         <button class="ghost" id="skillsBtn">Ouvrir les skills</button>
         <button class="ghost" id="logsBtn">Ouvrir les logs</button>
         <span class="toast" id="toast">Enregistré</span>
+      </div>
+      </div><!-- /viewConfig -->
+
+      <div id="viewSkills" class="hidden">
+        <div class="card">
+          <h2>Skills sous licence</h2>
+          <div id="skillList"></div>
+        </div>
       </div>
     </main>
 
@@ -352,6 +378,45 @@
         }
       });
 
+      // ----- Tabs & skills list -----
+      document.querySelectorAll(".tab").forEach((t) => {
+        t.addEventListener("click", () => {
+          document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
+          t.classList.add("active");
+          const which = t.dataset.tab;
+          $("viewConfig").classList.toggle("hidden", which !== "config");
+          $("viewSkills").classList.toggle("hidden", which !== "skills");
+          if (which === "skills") renderSkills();
+        });
+      });
+
+      async function renderSkills() {
+        const list = $("skillList");
+        let skills = [];
+        try { skills = await invoke("list_skills"); } catch (e) {}
+        list.innerHTML = "";
+        if (!skills || skills.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "skill-empty";
+          empty.textContent = "Aucun skill pour le moment — lancez une synchronisation.";
+          list.appendChild(empty);
+          return;
+        }
+        skills.forEach((s) => {
+          const row = document.createElement("div");
+          row.className = "skill-item";
+          const name = document.createElement("div");
+          name.className = "name";
+          name.textContent = "/" + s.slug;
+          const desc = document.createElement("div");
+          desc.className = "desc";
+          desc.textContent = s.description || "";
+          row.appendChild(name);
+          row.appendChild(desc);
+          list.appendChild(row);
+        });
+      }
+
       // ----- Boot -----
       async function boot() {
         try { defaultDir = await invoke("default_skill_dir"); } catch (e) {}
@@ -371,7 +436,10 @@
         }
       }
 
-      listen("status", (evt) => renderStatus(evt.payload));
+      listen("status", (evt) => {
+        renderStatus(evt.payload);
+        if (!$("viewSkills").classList.contains("hidden")) renderSkills();
+      });
       boot();
     </script>
   </body>

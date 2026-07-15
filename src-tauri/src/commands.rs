@@ -17,6 +17,12 @@ pub fn get_config(state: tauri::State<AppState>) -> AppConfig {
     state.config.lock().unwrap().clone()
 }
 
+/// Return the entitled skills (name + description only — no prompt body).
+#[tauri::command]
+pub fn list_skills(state: tauri::State<AppState>) -> Vec<crate::state::SkillListItem> {
+    state.skills.lock().unwrap().clone()
+}
+
 /// Persist a new configuration, apply it in memory, and kick off a sync. The
 /// log level takes effect on next restart.
 #[tauri::command]
