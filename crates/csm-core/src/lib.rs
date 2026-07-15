@@ -10,6 +10,7 @@
 //! - [`hash`]: content hashing used to detect changes.
 //! - [`paths`]: resolving well-known directories such as `~/.claude/skills`.
 
+pub mod backoff;
 pub mod config;
 pub mod diff;
 pub mod error;
@@ -17,5 +18,6 @@ pub mod hash;
 pub mod manifest;
 pub mod paths;
 pub mod state;
+pub mod sync;
 
 pub use error::{CoreError, Result};
