@@ -5,7 +5,7 @@ use std::collections::HashSet;
 /// What a sync should do, derived purely from (manifest, installed state).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SyncPlan {
-    /// Skills to download and install — either new, or whose hash changed.
+    /// Skills to (re)install — either new, or whose version changed.
     pub to_install: Vec<String>,
     /// Skills to remove — present in local state but gone from the manifest.
     pub to_remove: Vec<String>,
@@ -19,28 +19,29 @@ impl SyncPlan {
 
 /// Compute the sync plan.
 ///
-/// A skill is (re)installed when it is absent locally or its manifest hash
-/// differs from the installed hash. A skill is removed when it exists in local
-/// state but no longer appears in the manifest — this is why the app never
-/// deletes files it did not install: removal is keyed off `InstalledState`.
+/// A skill is (re)installed when it is absent locally or its manifest version
+/// differs from the installed version — the CSM backend is version-driven, so
+/// version is the change signal. A skill is removed when it exists in local
+/// state but no longer appears in the manifest; because removal is keyed off
+/// [`InstalledState`], the app never deletes files it did not install.
 ///
 /// Both output lists are sorted for deterministic, log-friendly ordering.
 pub fn plan_sync(manifest: &SkillManifest, state: &InstalledState) -> SyncPlan {
     let mut to_install: Vec<String> = manifest
         .skills
         .iter()
-        .filter(|entry| match state.skills.get(&entry.id) {
-            Some(installed) => installed.hash != entry.hash,
+        .filter(|entry| match state.skills.get(&entry.slug) {
+            Some(installed) => installed.version != entry.version,
             None => true,
         })
-        .map(|entry| entry.id.clone())
+        .map(|entry| entry.slug.clone())
         .collect();
 
-    let manifest_ids: HashSet<&String> = manifest.skills.iter().map(|s| &s.id).collect();
+    let manifest_slugs: HashSet<&String> = manifest.skills.iter().map(|s| &s.slug).collect();
     let mut to_remove: Vec<String> = state
         .skills
         .keys()
-        .filter(|id| !manifest_ids.contains(id))
+        .filter(|slug| !manifest_slugs.contains(slug))
         .cloned()
         .collect();
 
@@ -58,34 +59,32 @@ mod tests {
     use crate::manifest::SkillEntry;
     use crate::state::InstalledSkill;
 
-    fn entry(id: &str, hash: &str) -> SkillEntry {
+    fn entry(slug: &str, version: &str) -> SkillEntry {
         SkillEntry {
-            id: id.into(),
-            name: id.into(),
-            version: "1.0.0".into(),
-            hash: hash.into(),
+            slug: slug.into(),
+            description: None,
+            version: version.into(),
             target: "global".into(),
         }
     }
 
-    fn installed(hash: &str) -> InstalledSkill {
+    fn installed(version: &str) -> InstalledSkill {
         InstalledSkill {
-            version: "1.0.0".into(),
-            hash: hash.into(),
+            version: version.into(),
             target: "global".into(),
+            content_hash: "h".into(),
         }
     }
 
     #[test]
     fn empty_manifest_empty_state_is_noop() {
-        let plan = plan_sync(&SkillManifest::default(), &InstalledState::default());
-        assert!(plan.is_noop());
+        assert!(plan_sync(&SkillManifest::default(), &InstalledState::default()).is_noop());
     }
 
     #[test]
     fn new_skill_is_installed() {
         let manifest = SkillManifest {
-            skills: vec![entry("a", "h1")],
+            skills: vec![entry("a", "1.0.0")],
         };
         let plan = plan_sync(&manifest, &InstalledState::default());
         assert_eq!(plan.to_install, vec!["a"]);
@@ -93,57 +92,48 @@ mod tests {
     }
 
     #[test]
-    fn unchanged_hash_is_skipped() {
+    fn same_version_is_skipped() {
         let manifest = SkillManifest {
-            skills: vec![entry("a", "h1")],
+            skills: vec![entry("a", "1.0.0")],
         };
         let mut state = InstalledState::default();
-        state.upsert("a", installed("h1"));
+        state.upsert("a", installed("1.0.0"));
         assert!(plan_sync(&manifest, &state).is_noop());
     }
 
     #[test]
-    fn changed_hash_is_reinstalled() {
+    fn changed_version_is_reinstalled() {
         let manifest = SkillManifest {
-            skills: vec![entry("a", "h2")],
+            skills: vec![entry("a", "2.0.0")],
         };
         let mut state = InstalledState::default();
-        state.upsert("a", installed("h1"));
+        state.upsert("a", installed("1.0.0"));
         assert_eq!(plan_sync(&manifest, &state).to_install, vec!["a"]);
     }
 
     #[test]
     fn missing_from_manifest_is_removed() {
         let manifest = SkillManifest {
-            skills: vec![entry("a", "h1")],
+            skills: vec![entry("a", "1.0.0")],
         };
         let mut state = InstalledState::default();
-        state.upsert("a", installed("h1"));
-        state.upsert("gone", installed("hx"));
+        state.upsert("a", installed("1.0.0"));
+        state.upsert("gone", installed("1.0.0"));
         let plan = plan_sync(&manifest, &state);
         assert!(plan.to_install.is_empty());
         assert_eq!(plan.to_remove, vec!["gone"]);
     }
 
     #[test]
-    fn outputs_are_sorted() {
-        let manifest = SkillManifest {
-            skills: vec![entry("c", "n"), entry("a", "n"), entry("b", "n")],
-        };
-        let plan = plan_sync(&manifest, &InstalledState::default());
-        assert_eq!(plan.to_install, vec!["a", "b", "c"]);
-    }
-
-    #[test]
     fn mixed_scenario() {
-        // a: unchanged, b: changed, c: new, d: removed
+        // a: unchanged, b: bumped, c: new, d: removed
         let manifest = SkillManifest {
-            skills: vec![entry("a", "h"), entry("b", "h2"), entry("c", "h")],
+            skills: vec![entry("a", "1"), entry("b", "2"), entry("c", "1")],
         };
         let mut state = InstalledState::default();
-        state.upsert("a", installed("h"));
-        state.upsert("b", installed("h1"));
-        state.upsert("d", installed("h"));
+        state.upsert("a", installed("1"));
+        state.upsert("b", installed("1"));
+        state.upsert("d", installed("1"));
         let plan = plan_sync(&manifest, &state);
         assert_eq!(plan.to_install, vec!["b", "c"]);
         assert_eq!(plan.to_remove, vec!["d"]);

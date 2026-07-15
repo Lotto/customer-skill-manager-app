@@ -15,6 +15,8 @@ pub mod config;
 pub mod diff;
 pub mod error;
 pub mod hash;
+#[cfg(feature = "net")]
+pub mod http;
 pub mod manifest;
 pub mod paths;
 pub mod state;

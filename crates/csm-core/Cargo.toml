@@ -15,8 +15,12 @@ toml = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 dirs = { workspace = true }
-tar = { workspace = true }
-flate2 = { workspace = true }
+reqwest = { workspace = true, optional = true }
+
+[features]
+# Enables the reqwest-based HTTP skill source. Off by default so the pure
+# logic tests build fast and offline; the GUI app turns it on.
+net = ["dep:reqwest"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

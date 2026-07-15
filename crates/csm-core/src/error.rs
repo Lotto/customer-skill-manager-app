@@ -31,8 +31,43 @@ pub enum CoreError {
     #[error("config error: {0}")]
     Config(String),
 
+    #[error("subscription inactive (HTTP 402) — check the customer's billing")]
+    SubscriptionInactive,
+
+    #[error("license invalid (HTTP 403) — key rejected by the backend")]
+    LicenseInvalid,
+
+    #[error("resource not found (HTTP 404): {0}")]
+    NotFound(String),
+
+    #[error("rate limited (HTTP 429)")]
+    RateLimited,
+
+    #[error("server error (HTTP {0})")]
+    ServerError(u16),
+
     #[error("http error: {0}")]
     Http(String),
+}
+
+impl CoreError {
+    /// Whether retrying the same request could plausibly succeed. License and
+    /// not-found failures are permanent; transport, rate-limit and 5xx are not.
+    pub fn is_permanent(&self) -> bool {
+        matches!(
+            self,
+            CoreError::SubscriptionInactive | CoreError::LicenseInvalid | CoreError::NotFound(_)
+        )
+    }
+
+    /// Whether this is a licensing/billing failure, which the UI should surface
+    /// as an "attention" state rather than a transient hiccup.
+    pub fn is_license_error(&self) -> bool {
+        matches!(
+            self,
+            CoreError::SubscriptionInactive | CoreError::LicenseInvalid
+        )
+    }
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;

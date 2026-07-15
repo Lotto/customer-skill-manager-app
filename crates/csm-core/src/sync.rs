@@ -1,12 +1,10 @@
 use crate::config::AppConfig;
 use crate::diff::plan_sync;
-use crate::error::{CoreError, Result};
+use crate::error::Result;
 use crate::hash::sha256_hex;
 use crate::manifest::{SkillEntry, SkillManifest};
 use crate::state::{InstalledSkill, InstalledState};
-use flate2::read::GzDecoder;
 use std::path::Path;
-use tar::Archive;
 
 /// Marker file written at the root of every skill directory CSM installs.
 ///
@@ -14,14 +12,17 @@ use tar::Archive;
 /// directory a user created by hand in a target folder.
 pub const MANAGED_MARKER: &str = ".csm-managed";
 
-/// Where skill archives come from. Abstracted so the engine can be tested with
-/// an in-memory source, and so the reqwest-based HTTP client can live in the
-/// GUI crate without dragging its dependencies into the core.
+/// Filename of the materialized skill instructions.
+pub const SKILL_FILE: &str = "SKILL.md";
+
+/// Where skill content comes from. Abstracted so the engine can be tested with
+/// an in-memory source, and so the reqwest-based HTTP client can be swapped in
+/// without the core depending on it.
 pub trait SkillSource {
-    /// Fetch the current manifest for this license.
+    /// Fetch and parse the `__list` resource into a manifest.
     fn fetch_manifest(&self) -> Result<SkillManifest>;
-    /// Download the `.tar.gz` archive bytes for one skill.
-    fn download_skill(&self, entry: &SkillEntry) -> Result<Vec<u8>>;
+    /// Fetch the `instructions` markdown for one skill slug.
+    fn fetch_instructions(&self, slug: &str) -> Result<String>;
 }
 
 /// What a sync actually did.
@@ -29,8 +30,8 @@ pub trait SkillSource {
 pub struct SyncOutcome {
     pub installed: Vec<String>,
     pub removed: Vec<String>,
-    /// Per-skill failures: `(skill_id, message)`. A failure on one skill does
-    /// not abort the others.
+    /// Per-skill failures: `(slug, message)`. A failure on one skill does not
+    /// abort the others.
     pub errors: Vec<(String, String)>,
 }
 
@@ -43,13 +44,30 @@ impl SyncOutcome {
     }
 }
 
+/// Build the on-disk `SKILL.md` for a skill: YAML frontmatter (so it is a valid
+/// Claude Code skill) followed by the instructions body from the backend.
+pub fn build_skill_md(entry: &SkillEntry, instructions: &str) -> String {
+    format!(
+        "---\nname: {name}\ndescription: {desc}\n---\n\n{body}\n",
+        name = entry.slug,
+        desc = yaml_quote(entry.display_description()),
+        body = instructions.trim_end(),
+    )
+}
+
+/// Quote a string for safe use as a YAML scalar value (handles colons, `#`,
+/// leading indicators, etc. by always double-quoting and escaping).
+fn yaml_quote(s: &str) -> String {
+    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
 /// Run one full sync cycle: fetch manifest, install new/changed skills, remove
 /// skills dropped from the manifest, and persist the updated state.
 ///
-/// Network/extraction errors for a single skill are collected in
-/// [`SyncOutcome::errors`] rather than aborting the whole run, so one bad skill
-/// cannot block the rest. The state file is saved even on partial failure so
-/// successful work is not lost.
+/// Errors for a single skill are collected in [`SyncOutcome::errors`] rather
+/// than aborting the whole run, so one bad skill cannot block the rest. The
+/// state file is saved even on partial failure so successful work is not lost.
 pub fn run_sync(
     source: &impl SkillSource,
     config: &AppConfig,
@@ -61,46 +79,46 @@ pub fn run_sync(
     let plan = plan_sync(&manifest, &state);
     let mut outcome = SyncOutcome::default();
 
-    for id in &plan.to_install {
-        let entry = match manifest.get(id) {
+    for slug in &plan.to_install {
+        let entry = match manifest.get(slug) {
             Some(e) => e,
             None => continue, // plan is derived from manifest; unreachable in practice
         };
         match install_one(source, config, global_dir, entry) {
-            Ok(()) => {
+            Ok(content_hash) => {
                 state.upsert(
-                    entry.id.clone(),
+                    entry.slug.clone(),
                     InstalledSkill {
                         version: entry.version.clone(),
-                        hash: entry.hash.clone(),
                         target: entry.target.clone(),
+                        content_hash,
                     },
                 );
-                outcome.installed.push(id.clone());
+                outcome.installed.push(slug.clone());
             }
-            Err(e) => outcome.errors.push((id.clone(), e.to_string())),
+            Err(e) => outcome.errors.push((slug.clone(), e.to_string())),
         }
     }
 
-    for id in &plan.to_remove {
+    for slug in &plan.to_remove {
         let target = state
             .skills
-            .get(id)
+            .get(slug)
             .map(|s| s.target.clone())
             .unwrap_or_else(|| "global".to_string());
         let target_dir = match config.resolve_target(&target, global_dir) {
             Ok(d) => d,
             Err(e) => {
-                outcome.errors.push((id.clone(), e.to_string()));
+                outcome.errors.push((slug.clone(), e.to_string()));
                 continue;
             }
         };
-        match remove_managed_skill(&target_dir, id) {
+        match remove_managed_skill(&target_dir, slug) {
             Ok(_) => {
-                state.remove(id);
-                outcome.removed.push(id.clone());
+                state.remove(slug);
+                outcome.removed.push(slug.clone());
             }
-            Err(e) => outcome.errors.push((id.clone(), e.to_string())),
+            Err(e) => outcome.errors.push((slug.clone(), e.to_string())),
         }
     }
 
@@ -108,45 +126,35 @@ pub fn run_sync(
     Ok(outcome)
 }
 
+/// Fetch, materialize and install one skill. Returns the content hash.
 fn install_one(
     source: &impl SkillSource,
     config: &AppConfig,
     global_dir: &Path,
     entry: &SkillEntry,
-) -> Result<()> {
-    let bytes = source.download_skill(entry)?;
-    let actual = sha256_hex(&bytes);
-    if actual != entry.hash {
-        return Err(CoreError::HashMismatch {
-            id: entry.id.clone(),
-            expected: entry.hash.clone(),
-            actual,
-        });
-    }
+) -> Result<String> {
+    let instructions = source.fetch_instructions(&entry.slug)?;
+    let md = build_skill_md(entry, &instructions);
+    let content_hash = sha256_hex(md.as_bytes());
     let target_dir = config.resolve_target(&entry.target, global_dir)?;
-    install_skill_atomic(&bytes, &target_dir, &entry.id)
+    install_skill_atomic(&md, &target_dir, &entry.slug)?;
+    Ok(content_hash)
 }
 
-/// Extract a `.tar.gz` into `<target_dir>/<id>/`, atomically.
+/// Write `<target_dir>/<slug>/SKILL.md` atomically.
 ///
-/// The archive is expanded into a staging directory first; only once that
-/// succeeds and the managed-marker is written do we swap it into place. This
-/// guarantees a consumer never observes a half-written skill directory.
-fn install_skill_atomic(bytes: &[u8], target_dir: &Path, id: &str) -> Result<()> {
+/// Content is written to a staging directory and swapped into place only once
+/// complete, so a consumer never observes a half-written skill directory.
+fn install_skill_atomic(md: &str, target_dir: &Path, slug: &str) -> Result<()> {
     std::fs::create_dir_all(target_dir)?;
-    let final_dir = target_dir.join(id);
-    let staging = target_dir.join(format!(".csm-staging-{id}"));
+    let final_dir = target_dir.join(slug);
+    let staging = target_dir.join(format!(".csm-staging-{slug}"));
 
     if staging.exists() {
         std::fs::remove_dir_all(&staging)?;
     }
     std::fs::create_dir_all(&staging)?;
-
-    // tar's `unpack` refuses entries that escape the destination (path
-    // traversal via `..` or absolute paths), so extraction is safe.
-    let mut archive = Archive::new(GzDecoder::new(bytes));
-    archive.unpack(&staging)?;
-
+    std::fs::write(staging.join(SKILL_FILE), md)?;
     std::fs::write(
         staging.join(MANAGED_MARKER),
         b"Managed by Customer Skill Manager. Do not edit or remove.\n",
@@ -159,10 +167,10 @@ fn install_skill_atomic(bytes: &[u8], target_dir: &Path, id: &str) -> Result<()>
     Ok(())
 }
 
-/// Delete `<target_dir>/<id>/` only if it carries the managed marker.
+/// Delete `<target_dir>/<slug>/` only if it carries the managed marker.
 /// Returns whether anything was removed.
-fn remove_managed_skill(target_dir: &Path, id: &str) -> Result<bool> {
-    let dir = target_dir.join(id);
+fn remove_managed_skill(target_dir: &Path, slug: &str) -> Result<bool> {
+    let dir = target_dir.join(slug);
     if dir.join(MANAGED_MARKER).is_file() {
         std::fs::remove_dir_all(&dir)?;
         Ok(true)
@@ -174,50 +182,33 @@ fn remove_managed_skill(target_dir: &Path, id: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flate2::write::GzEncoder;
-    use flate2::Compression;
+    use crate::error::CoreError;
     use std::collections::HashMap;
-    use std::io::Write;
     use std::path::PathBuf;
 
-    /// Build a `.tar.gz` from `(path, contents)` pairs.
-    fn make_targz(files: &[(&str, &[u8])]) -> Vec<u8> {
-        let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
-        for (name, data) in files {
-            let mut header = tar::Header::new_gnu();
-            header.set_size(data.len() as u64);
-            header.set_mode(0o644);
-            header.set_cksum();
-            builder.append_data(&mut header, name, *data).unwrap();
-        }
-        builder.into_inner().unwrap().finish().unwrap()
-    }
-
-    /// In-memory skill source backed by a fixed manifest and archive bytes.
     struct MockSource {
         manifest: SkillManifest,
-        archives: HashMap<String, Vec<u8>>,
+        instructions: HashMap<String, String>,
     }
 
     impl SkillSource for MockSource {
         fn fetch_manifest(&self) -> Result<SkillManifest> {
             Ok(self.manifest.clone())
         }
-        fn download_skill(&self, entry: &SkillEntry) -> Result<Vec<u8>> {
-            self.archives
-                .get(&entry.id)
+        fn fetch_instructions(&self, slug: &str) -> Result<String> {
+            self.instructions
+                .get(slug)
                 .cloned()
-                .ok_or_else(|| CoreError::Http(format!("no archive for {}", entry.id)))
+                .ok_or_else(|| CoreError::Http(format!("no instructions for {slug}")))
         }
     }
 
-    fn entry_for(id: &str, archive: &[u8], target: &str) -> SkillEntry {
+    fn entry(slug: &str, version: &str, desc: Option<&str>) -> SkillEntry {
         SkillEntry {
-            id: id.into(),
-            name: id.into(),
-            version: "1.0.0".into(),
-            hash: sha256_hex(archive),
-            target: target.into(),
+            slug: slug.into(),
+            description: desc.map(Into::into),
+            version: version.into(),
+            target: "global".into(),
         }
     }
 
@@ -230,71 +221,60 @@ mod tests {
 
     fn fixture() -> Fixture {
         let tmp = tempfile::tempdir().unwrap();
-        let global_dir = tmp.path().join("global-skills");
-        let state_path = tmp.path().join("state.json");
         Fixture {
-            _tmp: tmp,
-            global_dir,
-            state_path,
+            global_dir: tmp.path().join("global-skills"),
+            state_path: tmp.path().join("state.json"),
             config: AppConfig::default(),
+            _tmp: tmp,
         }
     }
 
     #[test]
-    fn fresh_install_writes_files_and_marker() {
+    fn build_skill_md_has_frontmatter() {
+        let e = entry("bonjour", "1.0.0", Some("répond bonjour"));
+        let md = build_skill_md(&e, "# Contexte client\n\nfais X\n");
+        assert!(md.starts_with("---\nname: bonjour\ndescription: \"répond bonjour\"\n---\n"));
+        assert!(md.contains("fais X"));
+    }
+
+    #[test]
+    fn yaml_quote_escapes_specials() {
+        assert_eq!(yaml_quote("a: b"), "\"a: b\"");
+        assert_eq!(yaml_quote("say \"hi\""), "\"say \\\"hi\\\"\"");
+    }
+
+    #[test]
+    fn fresh_install_writes_skill_and_marker() {
         let f = fixture();
-        let archive = make_targz(&[("SKILL.md", b"# Devis\n"), ("prompt.txt", b"hello")]);
         let source = MockSource {
             manifest: SkillManifest {
-                skills: vec![entry_for("devis", &archive, "global")],
+                skills: vec![entry("bonjour", "1.0.0", Some("répond bonjour"))],
             },
-            archives: HashMap::from([("devis".to_string(), archive)]),
+            instructions: HashMap::from([("bonjour".to_string(), "répond bonjour".to_string())]),
         };
 
         let out = run_sync(&source, &f.config, &f.global_dir, &f.state_path).unwrap();
-        assert_eq!(out.installed, vec!["devis"]);
+        assert_eq!(out.installed, vec!["bonjour"]);
         assert!(out.is_clean());
 
-        let dir = f.global_dir.join("devis");
-        assert_eq!(
-            std::fs::read_to_string(dir.join("SKILL.md")).unwrap(),
-            "# Devis\n"
-        );
+        let dir = f.global_dir.join("bonjour");
+        let md = std::fs::read_to_string(dir.join(SKILL_FILE)).unwrap();
+        assert!(md.contains("name: bonjour"));
+        assert!(md.contains("répond bonjour"));
         assert!(dir.join(MANAGED_MARKER).is_file());
 
-        // State now records the skill.
         let state = InstalledState::load(&f.state_path).unwrap();
-        assert!(state.skills.contains_key("devis"));
+        assert_eq!(state.skills["bonjour"].version, "1.0.0");
     }
 
     #[test]
-    fn hash_mismatch_is_reported_and_not_installed() {
+    fn same_version_second_sync_is_noop() {
         let f = fixture();
-        let archive = make_targz(&[("SKILL.md", b"content")]);
-        let mut entry = entry_for("devis", &archive, "global");
-        entry.hash = "0000".into(); // wrong hash
         let source = MockSource {
             manifest: SkillManifest {
-                skills: vec![entry],
+                skills: vec![entry("bonjour", "1.0.0", None)],
             },
-            archives: HashMap::from([("devis".to_string(), archive)]),
-        };
-
-        let out = run_sync(&source, &f.config, &f.global_dir, &f.state_path).unwrap();
-        assert!(out.installed.is_empty());
-        assert_eq!(out.errors.len(), 1);
-        assert!(!f.global_dir.join("devis").exists());
-    }
-
-    #[test]
-    fn second_sync_with_same_hash_is_noop() {
-        let f = fixture();
-        let archive = make_targz(&[("SKILL.md", b"v1")]);
-        let source = MockSource {
-            manifest: SkillManifest {
-                skills: vec![entry_for("devis", &archive, "global")],
-            },
-            archives: HashMap::from([("devis".to_string(), archive)]),
+            instructions: HashMap::from([("bonjour".to_string(), "hi".to_string())]),
         };
         run_sync(&source, &f.config, &f.global_dir, &f.state_path).unwrap();
         let out = run_sync(&source, &f.config, &f.global_dir, &f.state_path).unwrap();
@@ -302,61 +282,70 @@ mod tests {
     }
 
     #[test]
-    fn changed_hash_replaces_content() {
+    fn version_bump_reinstalls() {
         let f = fixture();
-        let v1 = make_targz(&[("SKILL.md", b"v1"), ("old.txt", b"old")]);
-        let source1 = MockSource {
+        let v1 = MockSource {
             manifest: SkillManifest {
-                skills: vec![entry_for("devis", &v1, "global")],
+                skills: vec![entry("bonjour", "1.0.0", None)],
             },
-            archives: HashMap::from([("devis".to_string(), v1)]),
+            instructions: HashMap::from([("bonjour".to_string(), "v1 body".to_string())]),
         };
-        run_sync(&source1, &f.config, &f.global_dir, &f.state_path).unwrap();
+        run_sync(&v1, &f.config, &f.global_dir, &f.state_path).unwrap();
 
-        let v2 = make_targz(&[("SKILL.md", b"v2")]);
-        let source2 = MockSource {
+        let v2 = MockSource {
             manifest: SkillManifest {
-                skills: vec![entry_for("devis", &v2, "global")],
+                skills: vec![entry("bonjour", "2.0.0", None)],
             },
-            archives: HashMap::from([("devis".to_string(), v2)]),
+            instructions: HashMap::from([("bonjour".to_string(), "v2 body".to_string())]),
         };
-        let out = run_sync(&source2, &f.config, &f.global_dir, &f.state_path).unwrap();
-        assert_eq!(out.installed, vec!["devis"]);
+        let out = run_sync(&v2, &f.config, &f.global_dir, &f.state_path).unwrap();
+        assert_eq!(out.installed, vec!["bonjour"]);
 
-        let dir = f.global_dir.join("devis");
-        assert_eq!(std::fs::read_to_string(dir.join("SKILL.md")).unwrap(), "v2");
-        // Stale file from v1 is gone after the atomic swap.
-        assert!(!dir.join("old.txt").exists());
+        let md = std::fs::read_to_string(f.global_dir.join("bonjour").join(SKILL_FILE)).unwrap();
+        assert!(md.contains("v2 body"));
+        assert!(!md.contains("v1 body"));
+    }
+
+    #[test]
+    fn fetch_error_is_reported_not_fatal() {
+        let f = fixture();
+        // Manifest lists two skills but only one has instructions available.
+        let source = MockSource {
+            manifest: SkillManifest {
+                skills: vec![entry("ok", "1", None), entry("broken", "1", None)],
+            },
+            instructions: HashMap::from([("ok".to_string(), "fine".to_string())]),
+        };
+        let out = run_sync(&source, &f.config, &f.global_dir, &f.state_path).unwrap();
+        assert_eq!(out.installed, vec!["ok"]);
+        assert_eq!(out.errors.len(), 1);
+        assert_eq!(out.errors[0].0, "broken");
     }
 
     #[test]
     fn removed_from_manifest_deletes_managed_dir() {
         let f = fixture();
-        let archive = make_targz(&[("SKILL.md", b"x")]);
         let install = MockSource {
             manifest: SkillManifest {
-                skills: vec![entry_for("devis", &archive, "global")],
+                skills: vec![entry("bonjour", "1", None)],
             },
-            archives: HashMap::from([("devis".to_string(), archive)]),
+            instructions: HashMap::from([("bonjour".to_string(), "hi".to_string())]),
         };
         run_sync(&install, &f.config, &f.global_dir, &f.state_path).unwrap();
-        assert!(f.global_dir.join("devis").exists());
+        assert!(f.global_dir.join("bonjour").exists());
 
-        // Now the manifest no longer lists it.
         let empty = MockSource {
             manifest: SkillManifest::default(),
-            archives: HashMap::new(),
+            instructions: HashMap::new(),
         };
         let out = run_sync(&empty, &f.config, &f.global_dir, &f.state_path).unwrap();
-        assert_eq!(out.removed, vec!["devis"]);
-        assert!(!f.global_dir.join("devis").exists());
+        assert_eq!(out.removed, vec!["bonjour"]);
+        assert!(!f.global_dir.join("bonjour").exists());
         assert!(InstalledState::load(&f.state_path).unwrap().skills.is_empty());
     }
 
     #[test]
     fn removal_never_touches_unmanaged_dir() {
-        // Simulate a stale state entry whose on-disk dir has no marker (e.g. a
-        // dir the user created by hand). The engine must not delete it.
         let f = fixture();
         let user_dir = f.global_dir.join("handmade");
         std::fs::create_dir_all(&user_dir).unwrap();
@@ -367,18 +356,17 @@ mod tests {
             "handmade",
             InstalledSkill {
                 version: "1".into(),
-                hash: "h".into(),
                 target: "global".into(),
+                content_hash: "h".into(),
             },
         );
         state.save(&f.state_path).unwrap();
 
         let empty = MockSource {
             manifest: SkillManifest::default(),
-            archives: HashMap::new(),
+            instructions: HashMap::new(),
         };
         let out = run_sync(&empty, &f.config, &f.global_dir, &f.state_path).unwrap();
-        // Reported as "removed" from state, but the files are left untouched.
         assert_eq!(out.removed, vec!["handmade"]);
         assert!(user_dir.join("keep.txt").is_file());
     }

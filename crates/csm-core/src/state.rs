@@ -6,19 +6,23 @@ use std::path::Path;
 /// A skill the app has installed on this machine.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InstalledSkill {
+    /// Version last installed; compared against the manifest to detect updates.
     pub version: String,
-    pub hash: String,
+    /// Target directory name this skill was installed into.
     pub target: String,
+    /// SHA-256 of the materialized `SKILL.md`, used as an idempotency guard so
+    /// an unchanged skill is never needlessly rewritten.
+    pub content_hash: String,
 }
 
 /// The persistent record of everything CSM manages locally.
 ///
 /// This is the authority for what CSM may remove: the sync engine only ever
-/// deletes skills present in this state, never arbitrary files the user placed
-/// in the target directories themselves.
+/// deletes skills present in this state (and carrying the on-disk managed
+/// marker), never arbitrary files the user placed in the target directories.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct InstalledState {
-    /// skill id -> installed record (BTreeMap for deterministic serialization).
+    /// skill slug -> installed record (BTreeMap for deterministic output).
     pub skills: BTreeMap<String, InstalledSkill>,
 }
 
@@ -43,18 +47,26 @@ impl InstalledState {
         Ok(())
     }
 
-    pub fn upsert(&mut self, id: impl Into<String>, skill: InstalledSkill) {
-        self.skills.insert(id.into(), skill);
+    pub fn upsert(&mut self, slug: impl Into<String>, skill: InstalledSkill) {
+        self.skills.insert(slug.into(), skill);
     }
 
-    pub fn remove(&mut self, id: &str) -> Option<InstalledSkill> {
-        self.skills.remove(id)
+    pub fn remove(&mut self, slug: &str) -> Option<InstalledSkill> {
+        self.skills.remove(slug)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample() -> InstalledSkill {
+        InstalledSkill {
+            version: "1.0.0".into(),
+            target: "global".into(),
+            content_hash: "abc".into(),
+        }
+    }
 
     #[test]
     fn load_missing_is_default() {
@@ -68,14 +80,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("sub").join("state.json");
         let mut s = InstalledState::default();
-        s.upsert(
-            "devis",
-            InstalledSkill {
-                version: "1.0.0".into(),
-                hash: "abc".into(),
-                target: "global".into(),
-            },
-        );
+        s.upsert("bonjour", sample());
         s.save(&p).unwrap();
         assert_eq!(InstalledState::load(&p).unwrap(), s);
     }
@@ -83,14 +88,7 @@ mod tests {
     #[test]
     fn remove_returns_previous() {
         let mut s = InstalledState::default();
-        s.upsert(
-            "x",
-            InstalledSkill {
-                version: "1".into(),
-                hash: "h".into(),
-                target: "global".into(),
-            },
-        );
+        s.upsert("x", sample());
         assert!(s.remove("x").is_some());
         assert!(s.remove("x").is_none());
     }
