@@ -1,6 +1,7 @@
 use crate::state::AppState;
 use crate::status::AppStatus;
 use csm_core::config::AppConfig;
+use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 
@@ -60,6 +61,29 @@ pub fn default_skill_dir() -> String {
     csm_core::paths::global_skills_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default()
+}
+
+/// Open the skills directory in the system file browser. With `path`, opens
+/// that specific folder; without it, opens every effective destination
+/// directory (the configured ones, or the global default).
+#[tauri::command]
+pub fn open_skills(app: AppHandle, path: Option<String>) -> Result<(), String> {
+    let dirs: Vec<PathBuf> = match path {
+        Some(p) => vec![PathBuf::from(p)],
+        None => {
+            let cfg = app.state::<AppState>().config.lock().unwrap().clone();
+            let global = csm_core::paths::global_skills_dir().map_err(|e| e.to_string())?;
+            cfg.effective_skill_dirs(&global)
+        }
+    };
+    let opener = tauri_plugin_opener::OpenerExt::opener(&app);
+    for dir in dirs {
+        let _ = std::fs::create_dir_all(&dir);
+        opener
+            .open_path(dir.to_string_lossy(), None::<&str>)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Open a native folder picker and return the chosen path, or `None` if

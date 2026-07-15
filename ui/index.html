@@ -116,6 +116,7 @@
         font-size: 18px; line-height: 1; padding: 0 4px;
       }
       .dir-item .rm:hover { color: var(--err); }
+      .dir-item .rm.open:hover { color: var(--brand); }
     </style>
   </head>
   <body>
@@ -202,6 +203,7 @@
       <div class="actions">
         <button class="primary" id="saveBtn">Enregistrer &amp; synchroniser</button>
         <button class="ghost" id="syncBtn">Synchroniser maintenant</button>
+        <button class="ghost" id="skillsBtn">Ouvrir les skills</button>
         <button class="ghost" id="logsBtn">Ouvrir les logs</button>
         <span class="toast" id="toast">Enregistré</span>
       </div>
@@ -251,13 +253,26 @@
         renderDirs();
       }
 
+      function openBtn(dir) {
+        const b = document.createElement("button");
+        b.className = "rm open";
+        b.title = "Ouvrir ce dossier";
+        b.textContent = "⤢";
+        b.addEventListener("click", () => invoke("open_skills", { path: dir }).catch(() => {}));
+        return b;
+      }
+
       function renderDirs() {
         const list = $("dirList");
         list.innerHTML = "";
         if (skillDirs.length === 0) {
           const row = document.createElement("div");
           row.className = "dir-item";
-          row.innerHTML = '<span class="path default">Par défaut : ' + defaultDir + "</span>";
+          const path = document.createElement("span");
+          path.className = "path default";
+          path.textContent = "Par défaut : " + defaultDir;
+          row.appendChild(path);
+          row.appendChild(openBtn(defaultDir));
           list.appendChild(row);
           return;
         }
@@ -273,6 +288,7 @@
           rm.textContent = "×";
           rm.addEventListener("click", () => { skillDirs.splice(i, 1); renderDirs(); });
           row.appendChild(path);
+          row.appendChild(openBtn(dir));
           row.appendChild(rm);
           list.appendChild(row);
         });
@@ -308,6 +324,7 @@
         try { await invoke("sync_now"); toast($("toast"), "Synchronisation lancée"); }
         catch (e) { toast($("toast"), "Erreur : " + e, true); }
       });
+      $("skillsBtn").addEventListener("click", () => invoke("open_skills", {}).catch(() => {}));
       $("logsBtn").addEventListener("click", () => invoke("open_logs").catch(() => {}));
 
       // ----- Activation view -----

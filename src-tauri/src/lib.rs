@@ -69,6 +69,7 @@ pub fn run() {
             commands::open_logs,
             commands::default_skill_dir,
             commands::pick_skill_dir,
+            commands::open_skills,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
