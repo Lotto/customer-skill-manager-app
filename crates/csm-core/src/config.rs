@@ -115,15 +115,19 @@ mod tests {
 
     #[test]
     fn interval_has_floor() {
-        let mut c = AppConfig::default();
-        c.interval_minutes = 0;
+        let c = AppConfig {
+            interval_minutes: 0,
+            ..Default::default()
+        };
         assert_eq!(c.interval(), Duration::from_secs(60));
     }
 
     #[test]
     fn activation_requires_both_fields() {
-        let mut c = AppConfig::default();
-        c.license_key = "KEY".into();
+        let mut c = AppConfig {
+            license_key: "KEY".into(),
+            ..Default::default()
+        };
         assert!(!c.is_activated());
         c.backend_url = "https://x".into();
         assert!(c.is_activated());
@@ -140,14 +144,16 @@ mod tests {
     fn save_then_load_roundtrips() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("nested").join("config.toml");
-        let mut c = AppConfig::default();
-        c.backend_url = "https://backend.example.com".into();
-        c.license_key = "abc-123".into();
-        c.interval_minutes = 15;
-        c.targets.push(TargetDir {
-            name: "acme".into(),
-            path: PathBuf::from("/opt/acme/skills"),
-        });
+        let c = AppConfig {
+            backend_url: "https://backend.example.com".into(),
+            license_key: "abc-123".into(),
+            interval_minutes: 15,
+            targets: vec![TargetDir {
+                name: "acme".into(),
+                path: PathBuf::from("/opt/acme/skills"),
+            }],
+            ..Default::default()
+        };
         c.save(&p).unwrap();
         assert_eq!(AppConfig::load(&p).unwrap(), c);
     }

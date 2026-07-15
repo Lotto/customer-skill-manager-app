@@ -1,0 +1,15 @@
+{
+  "name": "customer-skill-manager-app",
+  "version": "0.1.0",
+  "description": "Silent desktop agent that keeps licensed Claude Code skills in sync.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  }
+}

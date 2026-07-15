@@ -1,0 +1,38 @@
+[package]
+name = "customer-skill-manager"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Lotto"]
+repository = "https://github.com/Lotto/customer-skill-manager-app"
+description = "Silent desktop agent that keeps licensed Claude Code skills in sync."
+default-run = "customer-skill-manager"
+
+[lib]
+name = "customer_skill_manager_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-updater = { version = "2", default-features = false, features = ["native-tls"] }
+
+csm-core = { path = "../crates/csm-core", features = ["net"] }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+dirs = { workspace = true }
+
+[features]
+# This feature is used for production builds where `devUrl` is not needed.
+custom-protocol = ["tauri/custom-protocol"]

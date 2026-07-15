@@ -45,7 +45,11 @@ impl HttpSkillSource {
     /// GET with retry/backoff for transient failures. Permanent failures
     /// (license, 404) short-circuit immediately.
     fn get(&self, query: &[(&str, &str)]) -> Result<String> {
-        let delays = backoff_delays(self.retries, Duration::from_millis(500), Duration::from_secs(10));
+        let delays = backoff_delays(
+            self.retries,
+            Duration::from_millis(500),
+            Duration::from_secs(10),
+        );
         let mut attempt = 0usize;
         loop {
             match self.try_get(query) {
@@ -113,7 +117,8 @@ mod tests {
 
     #[test]
     fn strips_leading_comment() {
-        let body = "<!--\ncsm:served 2026-07-15\ncsm:skill \"bonjour@1.0.0\"\n-->\n# Contexte\n\nbody";
+        let body =
+            "<!--\ncsm:served 2026-07-15\ncsm:skill \"bonjour@1.0.0\"\n-->\n# Contexte\n\nbody";
         assert_eq!(strip_leading_html_comment(body), "# Contexte\n\nbody");
     }
 

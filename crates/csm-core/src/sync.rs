@@ -341,7 +341,10 @@ mod tests {
         let out = run_sync(&empty, &f.config, &f.global_dir, &f.state_path).unwrap();
         assert_eq!(out.removed, vec!["bonjour"]);
         assert!(!f.global_dir.join("bonjour").exists());
-        assert!(InstalledState::load(&f.state_path).unwrap().skills.is_empty());
+        assert!(InstalledState::load(&f.state_path)
+            .unwrap()
+            .skills
+            .is_empty());
     }
 
     #[test]

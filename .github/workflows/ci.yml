@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Core logic (test + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      # Only the pure-logic crate is exercised here: it is GUI-free and has no
+      # system dependencies, so it tests fast and identically on any OS. The
+      # Tauri app is validated by the release build.
+      - name: Format check
+        run: cargo fmt -p csm-core -- --check
+
+      - name: Clippy
+        run: cargo clippy -p csm-core --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test -p csm-core
+
+  app:
+    name: App build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-22.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            libssl-dev \
+            libgtk-3-dev
+
+      # Compile the full Tauri app (no bundling) to catch platform-specific
+      # build breakage early. Bundling/signing happens in release.yml.
+      - name: Build app
+        run: cargo build -p customer-skill-manager

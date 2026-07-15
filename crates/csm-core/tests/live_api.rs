@@ -27,12 +27,19 @@ fn live_list_and_instructions() {
     let manifest = src.fetch_manifest().expect("fetch manifest");
     println!("Fetched {} skills:", manifest.skills.len());
     for s in &manifest.skills {
-        println!("  - {} @ {} ({})", s.slug, s.version, s.display_description());
+        println!(
+            "  - {} @ {} ({})",
+            s.slug,
+            s.version,
+            s.display_description()
+        );
     }
     assert!(!manifest.skills.is_empty(), "backend returned no skills");
 
     let first = &manifest.skills[0];
-    let instructions = src.fetch_instructions(&first.slug).expect("fetch instructions");
+    let instructions = src
+        .fetch_instructions(&first.slug)
+        .expect("fetch instructions");
     println!("\nInstructions for '{}':\n{}", first.slug, instructions);
     assert!(!instructions.is_empty());
     // The watermark comment must have been stripped.

@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Customer Skill Manager</title>
+    <style>
+      :root {
+        --bg: #f6f7fb;
+        --card: #ffffff;
+        --ink: #1a1c25;
+        --muted: #6b7080;
+        --line: #e4e6ef;
+        --brand: #5b4ee5;
+        --brand-2: #7c3aed;
+        --ok: #10b981;
+        --warn: #f59e0b;
+        --err: #ef4444;
+        --field: #ffffff;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #14151c;
+          --card: #1c1e28;
+          --ink: #eceef5;
+          --muted: #9aa0b4;
+          --line: #2c2f3d;
+          --brand: #8b7ff0;
+          --brand-2: #a78bfa;
+          --field: #232633;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+        font-size: 14px;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 20px 24px 16px;
+        background: linear-gradient(135deg, var(--brand), var(--brand-2));
+        color: #fff;
+      }
+      header .logo {
+        width: 38px; height: 38px; border-radius: 10px;
+        background: rgba(255,255,255,.16);
+        display: grid; place-items: center; flex: none;
+      }
+      header .logo span { display: block; width: 18px; height: 3px; border-radius: 2px; background: #fff; margin: 2px 0; }
+      header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+      header p { margin: 2px 0 0; font-size: 12px; opacity: .85; }
+      main { padding: 20px 24px 28px; max-width: 640px; margin: 0 auto; }
+
+      .status {
+        display: flex; align-items: center; gap: 12px;
+        background: var(--card); border: 1px solid var(--line);
+        border-radius: 12px; padding: 14px 16px; margin-bottom: 22px;
+      }
+      .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--muted); }
+      .dot.ok { background: var(--ok); } .dot.syncing { background: var(--brand); }
+      .dot.error { background: var(--err); } .dot.licenseProblem { background: var(--warn); }
+      .dot.needsActivation { background: var(--muted); }
+      .status .msg { font-weight: 550; }
+      .status .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+      .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 18px 6px; margin-bottom: 18px; }
+      .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 14px; }
+      .field { margin-bottom: 16px; }
+      label { display: block; font-weight: 550; margin-bottom: 6px; }
+      .hint { color: var(--muted); font-size: 12px; margin-top: 5px; }
+      input[type="text"], input[type="password"], input[type="number"], select {
+        width: 100%; padding: 9px 11px; border: 1px solid var(--line);
+        border-radius: 8px; background: var(--field); color: var(--ink); font-size: 14px;
+      }
+      input:focus, select:focus { outline: 2px solid var(--brand); outline-offset: -1px; border-color: transparent; }
+      .row { display: flex; gap: 14px; } .row > * { flex: 1; }
+      .check { display: flex; align-items: center; gap: 9px; }
+      .check input { width: 16px; height: 16px; }
+      .actions { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+      button {
+        font: inherit; font-weight: 600; border: none; border-radius: 8px;
+        padding: 10px 16px; cursor: pointer; transition: filter .12s;
+      }
+      button:hover { filter: brightness(1.06); }
+      button:active { filter: brightness(.95); }
+      .primary { background: var(--brand); color: #fff; }
+      .ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+      .toast { margin-left: auto; font-size: 12px; color: var(--ok); opacity: 0; transition: opacity .2s; }
+      .toast.show { opacity: 1; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="logo"><div><span></span><span style="width:13px"></span><span style="width:9px"></span></div></div>
+      <div>
+        <h1>Customer Skill Manager</h1>
+        <p>Synchronisation silencieuse de vos skills sous licence</p>
+      </div>
+    </header>
+
+    <main>
+      <div class="status">
+        <div class="dot" id="dot"></div>
+        <div>
+          <div class="msg" id="statusMsg">Chargement…</div>
+          <div class="sub" id="statusSub"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Licence</h2>
+        <div class="field">
+          <label for="backendUrl">URL du serveur</label>
+          <input type="text" id="backendUrl" placeholder="https://…/functions/v1/skill-resource" />
+        </div>
+        <div class="field">
+          <label for="licenseKey">Clé de licence</label>
+          <input type="password" id="licenseKey" placeholder="csm_live_…" />
+          <div class="hint">Fournie avec votre abonnement. Stockée localement, jamais partagée.</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Synchronisation</h2>
+        <div class="row">
+          <div class="field">
+            <label for="interval">Intervalle (minutes)</label>
+            <input type="number" id="interval" min="1" value="30" />
+          </div>
+          <div class="field">
+            <label for="logLevel">Niveau de logs</label>
+            <select id="logLevel">
+              <option value="error">error</option>
+              <option value="warn">warn</option>
+              <option value="info">info</option>
+              <option value="debug">debug</option>
+              <option value="trace">trace</option>
+            </select>
+          </div>
+        </div>
+        <div class="field check">
+          <input type="checkbox" id="autoUpdate" />
+          <label for="autoUpdate" style="margin:0">Appliquer les mises à jour automatiquement</label>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="primary" id="saveBtn">Enregistrer &amp; synchroniser</button>
+        <button class="ghost" id="syncBtn">Synchroniser maintenant</button>
+        <button class="ghost" id="logsBtn">Ouvrir les logs</button>
+        <span class="toast" id="toast">Enregistré</span>
+      </div>
+    </main>
+
+    <script>
+      const { invoke } = window.__TAURI__.core;
+      const { listen } = window.__TAURI__.event;
+
+      const $ = (id) => document.getElementById(id);
+      let currentConfig = { targets: [] };
+
+      function renderStatus(s) {
+        $("dot").className = "dot " + (s.phase || "");
+        $("statusMsg").textContent = s.message || "";
+        let sub = "";
+        if (s.lastSyncEpoch) {
+          const d = new Date(s.lastSyncEpoch * 1000);
+          sub = "Dernière synchro : " + d.toLocaleString();
+        }
+        if (typeof s.installedCount === "number") {
+          sub += (sub ? " · " : "") + s.installedCount + " skill(s) gérés";
+        }
+        if (s.updateAvailable) {
+          sub += (sub ? " · " : "") + "Mise à jour " + s.updateAvailable + " prête (redémarrer)";
+        }
+        $("statusSub").textContent = sub;
+      }
+
+      function fillForm(c) {
+        currentConfig = c;
+        $("backendUrl").value = c.backend_url || "";
+        $("licenseKey").value = c.license_key || "";
+        $("interval").value = c.interval_minutes || 30;
+        $("logLevel").value = c.log_level || "info";
+        $("autoUpdate").checked = !!c.auto_apply_updates;
+      }
+
+      function readForm() {
+        return {
+          ...currentConfig,
+          backend_url: $("backendUrl").value.trim(),
+          license_key: $("licenseKey").value.trim(),
+          interval_minutes: Math.max(1, parseInt($("interval").value, 10) || 30),
+          log_level: $("logLevel").value,
+          auto_apply_updates: $("autoUpdate").checked,
+        };
+      }
+
+      function toast(msg) {
+        const t = $("toast");
+        t.textContent = msg;
+        t.classList.add("show");
+        setTimeout(() => t.classList.remove("show"), 1800);
+      }
+
+      $("saveBtn").addEventListener("click", async () => {
+        try {
+          await invoke("save_config", { config: readForm() });
+          toast("Enregistré");
+        } catch (e) { toast("Erreur : " + e); }
+      });
+      $("syncBtn").addEventListener("click", async () => {
+        try { await invoke("sync_now"); toast("Synchronisation lancée"); }
+        catch (e) { toast("Erreur : " + e); }
+      });
+      $("logsBtn").addEventListener("click", () => invoke("open_logs").catch(() => {}));
+
+      async function boot() {
+        try { fillForm(await invoke("get_config")); } catch (e) {}
+        try { renderStatus(await invoke("get_status")); } catch (e) {}
+      }
+      listen("status", (evt) => renderStatus(evt.payload));
+      boot();
+    </script>
+  </body>
+</html>

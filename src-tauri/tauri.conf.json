@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Customer Skill Manager",
+  "version": "0.1.0",
+  "identifier": "com.lotto.customer-skill-manager",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Customer Skill Manager",
+        "width": 760,
+        "height": 620,
+        "minWidth": 560,
+        "minHeight": 480,
+        "resizable": true,
+        "visible": false,
+        "center": true
+      }
+    ],
+    "trayIcon": {
+      "id": "main",
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true,
+      "tooltip": "Customer Skill Manager"
+    },
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "app", "dmg", "appimage"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": true,
+    "shortDescription": "Keeps licensed Claude Code skills in sync.",
+    "longDescription": "A silent, tray-resident agent that keeps a customer's licensed Claude Code skills up to date, materializing them into ~/.claude/skills and updating itself automatically."
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZDNUY1NzZDN0Q5NjMyRTEKUldUaE1wWjliRmRmYkRWc3MzWVc5Tk1FUGlpTnNKYTVONzNOVWJSd3Qzd25uMkxyMEt4L01zZHUK",
+      "endpoints": [
+        "https://github.com/Lotto/customer-skill-manager-app/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}
