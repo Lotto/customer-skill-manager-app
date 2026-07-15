@@ -11,7 +11,9 @@
 //! - [`paths`]: resolving well-known directories such as `~/.claude/skills`.
 
 pub mod backoff;
+pub mod cleanup;
 pub mod config;
+pub mod desktop;
 pub mod diff;
 pub mod error;
 pub mod hash;

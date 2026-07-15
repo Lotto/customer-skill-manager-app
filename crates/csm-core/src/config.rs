@@ -26,6 +26,9 @@ pub struct AppConfig {
     pub log_level: String,
     /// Whether to apply downloaded app updates automatically at next restart.
     pub auto_apply_updates: bool,
+    /// Whether to also publish skills into Claude Desktop's skill store so they
+    /// appear in Desktop's *Customize → Skills* panel.
+    pub sync_to_desktop: bool,
     /// Directories skills are installed into. Every entitled skill is written
     /// to every directory in this list. When empty, the global default
     /// (`~/.claude/skills`) is used.
@@ -40,6 +43,7 @@ impl Default for AppConfig {
             interval_minutes: DEFAULT_INTERVAL_MINUTES,
             log_level: "info".to_string(),
             auto_apply_updates: false,
+            sync_to_desktop: true,
             skill_dirs: Vec::new(),
         }
     }
