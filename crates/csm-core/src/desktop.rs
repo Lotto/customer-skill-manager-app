@@ -6,10 +6,11 @@
 //! skill. This module mirrors the customer's entitled skills into that store,
 //! silently, so they appear in Desktop's *Customize → Skills* panel.
 //!
-//! We only ever touch entries we own: our manifest entries carry
-//! `source = "customer-skill-manager"`, and our skill folders carry the
-//! [`crate::sync::MANAGED_MARKER`]. Anthropic-managed skills and any the user
-//! added by hand are left untouched.
+//! We only ever touch entries we own, identified by the on-disk
+//! [`crate::sync::MANAGED_MARKER`] inside each skill's folder (never by a field
+//! in the manifest — Desktop validates entries against a strict schema, so our
+//! entries must match its exact user-skill shape and carry no extra keys).
+//! Anthropic-managed skills and any the user added by hand are left untouched.
 
 use crate::error::Result;
 use crate::manifest::SkillManifest;
@@ -17,10 +18,6 @@ use crate::sync::{MANAGED_MARKER, SKILL_FILE};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-
-/// Value written to `source` on the manifest entries we manage, so we can find
-/// and clean up exactly our own skills.
-pub const CSM_SOURCE: &str = "customer-skill-manager";
 
 /// A skill to publish into a Desktop store.
 #[derive(Debug, Clone)]
@@ -133,22 +130,26 @@ fn apply_to_store(
         .cloned()
         .unwrap_or_default();
 
-    // Drop our stale entries (ours = our source tag) and delete their folders.
+    // Drop our stale entries — ours = the skill folder carries our marker — and
+    // that are no longer entitled. Anything without our marker (Anthropic or
+    // hand-added user skills) is left untouched.
     let mut removed = 0usize;
     entries.retain(|e| {
-        if entry_source(e) != Some(CSM_SOURCE) {
-            return true; // not ours — keep (Anthropic / user-added)
-        }
         let slug = entry_slug(e).unwrap_or_default();
-        if desired_slugs.contains(slug.as_str()) {
-            return true; // still wanted; will be refreshed below
+        if slug.is_empty() {
+            return true;
         }
-        remove_managed_folder(&skills_dir, &slug);
-        removed += 1;
-        false
+        let ours = skills_dir.join(&slug).join(MANAGED_MARKER).is_file();
+        if ours && !desired_slugs.contains(slug.as_str()) {
+            remove_managed_folder(&skills_dir, &slug);
+            removed += 1;
+            return false;
+        }
+        true
     });
 
-    // Upsert every desired skill: folder + manifest entry.
+    // Upsert every desired skill: folder (with our marker) + a manifest entry
+    // matching Desktop's exact user-skill shape (no extra keys).
     let mut installed = 0usize;
     for d in desired {
         write_skill_folder(&skills_dir, d)?;
@@ -157,13 +158,11 @@ fn apply_to_store(
             "name": d.name,
             "description": d.description,
             "creatorType": "user",
-            "enabled": true,
+            "syncManaged": false,
             "updatedAt": now_iso,
-            "source": CSM_SOURCE,
+            "enabled": true,
         });
-        match entries.iter().position(|e| {
-            entry_source(e) == Some(CSM_SOURCE) && entry_slug(e).as_deref() == Some(&d.slug)
-        }) {
+        match entries.iter().position(|e| entry_slug(e).as_deref() == Some(&d.slug)) {
             Some(pos) => entries[pos] = new_entry,
             None => entries.push(new_entry),
         }
@@ -180,9 +179,6 @@ fn apply_to_store(
     Ok((installed, removed))
 }
 
-fn entry_source(e: &Value) -> Option<&str> {
-    e.get("source").and_then(|v| v.as_str())
-}
 fn entry_slug(e: &Value) -> Option<String> {
     e.get("skillId").and_then(|v| v.as_str()).map(String::from)
 }
@@ -305,16 +301,22 @@ mod tests {
         // Manifest: anthropic entry preserved + our two added with our source.
         let skills = load_skills(&store);
         assert_eq!(skills.len(), 3);
-        // The Anthropic entry (creatorType "anthropic", no `source`) is preserved.
-        assert!(skills.iter().any(|e| {
-            entry_slug(e).as_deref() == Some("skill-creator") && entry_source(e).is_none()
-        }));
+        // The Anthropic entry is preserved.
+        assert!(skills
+            .iter()
+            .any(|e| entry_slug(e).as_deref() == Some("skill-creator")));
+        // Our two entries match Desktop's exact user-skill shape (no extra keys).
         let ours: Vec<_> = skills
             .iter()
-            .filter(|e| entry_source(e) == Some(CSM_SOURCE))
+            .filter(|e| {
+                let s = entry_slug(e);
+                s.as_deref() == Some("bonjour") || s.as_deref() == Some("bye")
+            })
             .collect();
         assert_eq!(ours.len(), 2);
         assert_eq!(ours[0]["creatorType"], "user");
+        assert_eq!(ours[0]["syncManaged"], false);
+        assert!(ours[0].get("source").is_none());
     }
 
     #[test]
@@ -327,7 +329,7 @@ mod tests {
         sync_desktop(&manifest, &read_dir, std::slice::from_ref(&store), 2, "t");
         let ours = load_skills(&store)
             .into_iter()
-            .filter(|e| entry_source(e) == Some(CSM_SOURCE))
+            .filter(|e| entry_slug(e).as_deref() == Some("bonjour"))
             .count();
         assert_eq!(ours, 1);
     }

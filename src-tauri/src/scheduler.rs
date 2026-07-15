@@ -154,12 +154,15 @@ fn mirror_to_desktop(cfg: &AppConfig, global_dir: &std::path::Path, outcome: &cs
         .unwrap_or_else(|| global_dir.to_path_buf());
 
     let now = chrono::Utc::now();
+    // Match JavaScript's `Date.toISOString()` exactly (millis + `Z`), which is
+    // what Claude Desktop writes and validates its manifest against.
+    let now_iso = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let d = csm_core::desktop::sync_desktop(
         &outcome.manifest,
         &read_dir,
         &stores,
         now.timestamp_millis(),
-        &now.to_rfc3339(),
+        &now_iso,
     );
     tracing::info!(
         stores = d.stores,
