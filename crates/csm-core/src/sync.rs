@@ -36,6 +36,8 @@ pub struct SyncOutcome {
     /// Per-skill failures: `(slug, message)`. A failure on one skill does not
     /// abort the others.
     pub errors: Vec<(String, String)>,
+    /// The manifest fetched this cycle (used e.g. to mirror to Claude Desktop).
+    pub manifest: SkillManifest,
 }
 
 impl SyncOutcome {
@@ -193,6 +195,7 @@ pub fn run_sync(
         .collect();
     outcome.removed = removed.into_iter().collect();
 
+    outcome.manifest = manifest;
     Ok(outcome)
 }
 

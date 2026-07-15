@@ -93,6 +93,10 @@ fn run_blocking(cfg: AppConfig, state_path: std::path::PathBuf) -> csm_core::Res
     for (slug, err) in &outcome.errors {
         tracing::warn!(skill = slug.as_str(), "skill sync error: {err}");
     }
+
+    if cfg.sync_to_desktop {
+        mirror_to_desktop(&cfg, &global_dir, &outcome);
+    }
     if outcome.changed() {
         tracing::info!(
             installed = outcome.installed.len(),
@@ -109,6 +113,42 @@ fn run_blocking(cfg: AppConfig, state_path: std::path::PathBuf) -> csm_core::Res
         errors: outcome.errors.len(),
         total,
     })
+}
+
+/// Mirror the entitled skills into Claude Desktop's skill store(s), if any are
+/// present on this machine. Best-effort: failures are logged, never fatal.
+fn mirror_to_desktop(cfg: &AppConfig, global_dir: &std::path::Path, outcome: &csm_core::sync::SyncOutcome) {
+    let Some(roaming) = dirs::config_dir() else {
+        return;
+    };
+    let stores = csm_core::desktop::discover_desktop_stores(&roaming);
+    if stores.is_empty() {
+        tracing::debug!("no Claude Desktop skill store found; skipping desktop sync");
+        return;
+    }
+    let read_dir = cfg
+        .effective_skill_dirs(global_dir)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| global_dir.to_path_buf());
+
+    let now = chrono::Utc::now();
+    let d = csm_core::desktop::sync_desktop(
+        &outcome.manifest,
+        &read_dir,
+        &stores,
+        now.timestamp_millis(),
+        &now.to_rfc3339(),
+    );
+    tracing::info!(
+        stores = d.stores,
+        installed = d.installed,
+        removed = d.removed,
+        "mirrored skills to Claude Desktop"
+    );
+    for (store, err) in &d.errors {
+        tracing::warn!(store = store.as_str(), "desktop sync error: {err}");
+    }
 }
 
 fn summary_to_status(app: &AppHandle, s: SyncSummary) -> AppStatus {

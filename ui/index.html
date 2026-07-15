@@ -190,6 +190,10 @@
           <input type="checkbox" id="autoUpdate" />
           <label for="autoUpdate" style="margin:0">Appliquer les mises à jour automatiquement</label>
         </div>
+        <div class="field check">
+          <input type="checkbox" id="syncDesktop" />
+          <label for="syncDesktop" style="margin:0">Rendre les skills disponibles dans Claude Desktop</label>
+        </div>
       </div>
 
       <div class="card">
@@ -249,6 +253,7 @@
         $("interval").value = c.interval_minutes || 30;
         $("logLevel").value = c.log_level || "info";
         $("autoUpdate").checked = !!c.auto_apply_updates;
+        $("syncDesktop").checked = c.sync_to_desktop !== false;
         skillDirs = Array.isArray(c.skill_dirs) ? c.skill_dirs.slice() : [];
         renderDirs();
       }
@@ -302,6 +307,7 @@
           interval_minutes: Math.max(1, parseInt($("interval").value, 10) || 30),
           log_level: $("logLevel").value,
           auto_apply_updates: $("autoUpdate").checked,
+          sync_to_desktop: $("syncDesktop").checked,
           skill_dirs: skillDirs.slice(),
         };
       }

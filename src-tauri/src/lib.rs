@@ -74,6 +74,20 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
 
+            // Uninstall the deprecated csm-loader plugin, if present.
+            if let Some(home) = dirs::home_dir() {
+                match csm_core::cleanup::remove_legacy_plugin(&home.join(".claude")) {
+                    Ok(c) if c.did_anything() => {
+                        tracing::info!(
+                            dirs = c.removed_dirs.len(),
+                            "removed legacy csm-loader plugin"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("legacy plugin cleanup failed: {e}"),
+                }
+            }
+
             // Run at login (idempotent; ignore failures on locked-down machines).
             if let Err(e) = app.autolaunch().enable() {
                 tracing::warn!("could not enable autostart: {e}");
