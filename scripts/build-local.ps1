@@ -16,8 +16,9 @@
   and initializes the VS Developer environment for the VC toolset itself.
 
 .EXAMPLE
-  ./scripts/build-local.ps1 "cargo tauri dev"
-  ./scripts/build-local.ps1 "cargo tauri build"
+  ./scripts/build-local.ps1 "npx tauri dev"     # the Tauri CLI is the npm dep
+  ./scripts/build-local.ps1 "npx tauri build"
+  ./scripts/build-local.ps1 "cargo build -p customer-skill-manager"
 #>
 param(
   [Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)]

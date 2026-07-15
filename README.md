@@ -56,9 +56,12 @@ The app requires the **MSVC C++ toolchain with the Windows SDK headers**
 Developer environment first:
 
 ```powershell
-./scripts/build-local.ps1 "cargo tauri dev"     # run locally
-./scripts/build-local.ps1 "cargo tauri build"   # produce installers
+./scripts/build-local.ps1 "npx tauri dev"     # run locally
+./scripts/build-local.ps1 "npx tauri build"   # produce installers
 ```
+
+(The Tauri CLI is the npm dev-dependency, so use `npx tauri …`. `cargo build
+-p customer-skill-manager` also works for a plain compile check.)
 
 If you hit `fatal error C1083: Cannot open include file 'vcruntime.h'`, your VS
 install is missing the C++ headers — install *"Desktop development with C++"*
