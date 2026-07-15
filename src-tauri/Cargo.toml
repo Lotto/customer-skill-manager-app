@@ -20,6 +20,7 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
 tauri-plugin-updater = { version = "2", default-features = false, features = ["native-tls"] }
 
 csm-core = { path = "../crates/csm-core", features = ["net"] }

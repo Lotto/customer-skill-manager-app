@@ -8,11 +8,13 @@ use std::path::Path;
 pub struct InstalledSkill {
     /// Version last installed; compared against the manifest to detect updates.
     pub version: String,
-    /// Target directory name this skill was installed into.
-    pub target: String,
     /// SHA-256 of the materialized `SKILL.md`, used as an idempotency guard so
     /// an unchanged skill is never needlessly rewritten.
     pub content_hash: String,
+    /// Absolute directories this skill is currently installed in (as strings so
+    /// the state file is portable and diffable). Removal is scoped to these.
+    #[serde(default)]
+    pub dirs: Vec<String>,
 }
 
 /// The persistent record of everything CSM manages locally.
@@ -63,8 +65,8 @@ mod tests {
     fn sample() -> InstalledSkill {
         InstalledSkill {
             version: "1.0.0".into(),
-            target: "global".into(),
             content_hash: "abc".into(),
+            dirs: vec!["/home/u/.claude/skills".into()],
         }
     }
 

@@ -58,6 +58,7 @@ pub fn run() {
             Some(vec!["--minimized"]),
         ))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
@@ -66,6 +67,8 @@ pub fn run() {
             commands::save_config,
             commands::sync_now,
             commands::open_logs,
+            commands::default_skill_dir,
+            commands::pick_skill_dir,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

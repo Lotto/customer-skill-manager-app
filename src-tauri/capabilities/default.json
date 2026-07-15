@@ -10,6 +10,7 @@
     "core:window:allow-hide",
     "core:window:allow-set-focus",
     "opener:default",
-    "updater:default"
+    "updater:default",
+    "dialog:default"
   ]
 }

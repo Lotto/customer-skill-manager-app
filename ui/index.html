@@ -56,18 +56,6 @@
       header p { margin: 2px 0 0; font-size: 12px; opacity: .85; }
       main { padding: 20px 24px 28px; max-width: 640px; margin: 0 auto; }
 
-      .status {
-        display: flex; align-items: center; gap: 12px;
-        background: var(--card); border: 1px solid var(--line);
-        border-radius: 12px; padding: 14px 16px; margin-bottom: 22px;
-      }
-      .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--muted); }
-      .dot.ok { background: var(--ok); } .dot.syncing { background: var(--brand); }
-      .dot.error { background: var(--err); } .dot.licenseProblem { background: var(--warn); }
-      .dot.needsActivation { background: var(--muted); }
-      .status .msg { font-weight: 550; }
-      .status .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
-
       .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 18px 6px; margin-bottom: 18px; }
       .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 14px; }
       .field { margin-bottom: 16px; }
@@ -88,10 +76,46 @@
       }
       button:hover { filter: brightness(1.06); }
       button:active { filter: brightness(.95); }
+      button:disabled { opacity: .5; cursor: default; filter: none; }
       .primary { background: var(--brand); color: #fff; }
       .ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
       .toast { margin-left: auto; font-size: 12px; color: var(--ok); opacity: 0; transition: opacity .2s; }
       .toast.show { opacity: 1; }
+      .toast.err { color: var(--err); }
+
+      /* Status card (config view) */
+      .status {
+        display: flex; align-items: center; gap: 12px;
+        background: var(--card); border: 1px solid var(--line);
+        border-radius: 12px; padding: 14px 16px; margin-bottom: 22px;
+      }
+      .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--muted); }
+      .dot.ok { background: var(--ok); } .dot.syncing { background: var(--brand); }
+      .dot.error { background: var(--err); } .dot.licenseProblem { background: var(--warn); }
+      .dot.needsActivation { background: var(--muted); }
+      .status .msg { font-weight: 550; }
+      .status .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+      /* Activation view */
+      #activation { max-width: 460px; margin: 34px auto 0; text-align: center; }
+      #activation .lead { color: var(--muted); margin: 0 0 24px; line-height: 1.5; }
+      #activation .card { text-align: left; padding-bottom: 18px; }
+      #activation .primary { width: 100%; padding: 12px; margin-top: 4px; font-size: 15px; }
+      .hidden { display: none !important; }
+
+      /* Skill directory rows */
+      .dir-item {
+        display: flex; align-items: center; gap: 10px;
+        padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px;
+        margin-bottom: 8px; background: var(--field);
+      }
+      .dir-item .path { flex: 1; font-size: 13px; word-break: break-all; }
+      .dir-item .path.default { color: var(--muted); font-style: italic; }
+      .dir-item .rm {
+        border: none; background: transparent; color: var(--muted); cursor: pointer;
+        font-size: 18px; line-height: 1; padding: 0 4px;
+      }
+      .dir-item .rm:hover { color: var(--err); }
     </style>
   </head>
   <body>
@@ -99,11 +123,29 @@
       <div class="logo"><div><span></span><span style="width:13px"></span><span style="width:9px"></span></div></div>
       <div>
         <h1>Customer Skill Manager</h1>
-        <p>Synchronisation silencieuse de vos skills sous licence</p>
       </div>
     </header>
 
-    <main>
+    <!-- ===== First-run / activation view: only URL + license key ===== -->
+    <main id="activation" class="hidden">
+      <p class="lead">Bienvenue. Entrez vos identifiants de licence pour démarrer la synchronisation de vos skills.</p>
+      <div class="card">
+        <div class="field">
+          <label for="actUrl">URL du serveur</label>
+          <input type="text" id="actUrl" placeholder="https://…/functions/v1/skill-resource" />
+        </div>
+        <div class="field">
+          <label for="actKey">Clé de licence</label>
+          <input type="password" id="actKey" placeholder="csm_live_…" autofocus />
+          <div class="hint">Fournie avec votre abonnement. Stockée localement, jamais partagée.</div>
+        </div>
+        <button class="primary" id="activateBtn">Activer</button>
+        <div style="text-align:center"><span class="toast" id="actToast"></span></div>
+      </div>
+    </main>
+
+    <!-- ===== Full configuration view (once activated) ===== -->
+    <main id="config" class="hidden">
       <div class="status">
         <div class="dot" id="dot"></div>
         <div>
@@ -149,6 +191,14 @@
         </div>
       </div>
 
+      <div class="card">
+        <h2>Dossiers des skills</h2>
+        <div id="dirList"></div>
+        <div class="field" style="margin-top:12px">
+          <button class="ghost" id="addDirBtn">+ Ajouter un dossier</button>
+        </div>
+      </div>
+
       <div class="actions">
         <button class="primary" id="saveBtn">Enregistrer &amp; synchroniser</button>
         <button class="ghost" id="syncBtn">Synchroniser maintenant</button>
@@ -160,37 +210,75 @@
     <script>
       const { invoke } = window.__TAURI__.core;
       const { listen } = window.__TAURI__.event;
-
       const $ = (id) => document.getElementById(id);
-      let currentConfig = { targets: [] };
 
+      let currentConfig = {};
+      let skillDirs = [];
+      let defaultDir = "~/.claude/skills";
+
+      const isActivated = (c) => !!(c && c.backend_url && c.backend_url.trim() && c.license_key && c.license_key.trim());
+
+      function showView(name) {
+        $("activation").classList.toggle("hidden", name !== "activation");
+        $("config").classList.toggle("hidden", name !== "config");
+      }
+
+      function toast(el, msg, isErr) {
+        el.textContent = msg;
+        el.classList.toggle("err", !!isErr);
+        el.classList.add("show");
+        setTimeout(() => el.classList.remove("show"), 2000);
+      }
+
+      // ----- Config (full) view -----
       function renderStatus(s) {
         $("dot").className = "dot " + (s.phase || "");
         $("statusMsg").textContent = s.message || "";
         let sub = "";
-        if (s.lastSyncEpoch) {
-          const d = new Date(s.lastSyncEpoch * 1000);
-          sub = "Dernière synchro : " + d.toLocaleString();
-        }
-        if (typeof s.installedCount === "number") {
-          sub += (sub ? " · " : "") + s.installedCount + " skill(s) gérés";
-        }
-        if (s.updateAvailable) {
-          sub += (sub ? " · " : "") + "Mise à jour " + s.updateAvailable + " prête (redémarrer)";
-        }
+        if (s.lastSyncEpoch) sub = "Dernière synchro : " + new Date(s.lastSyncEpoch * 1000).toLocaleString();
+        if (typeof s.installedCount === "number") sub += (sub ? " · " : "") + s.installedCount + " skill(s) gérés";
+        if (s.updateAvailable) sub += (sub ? " · " : "") + "Mise à jour " + s.updateAvailable + " prête (redémarrer)";
         $("statusSub").textContent = sub;
       }
 
-      function fillForm(c) {
-        currentConfig = c;
+      function fillConfigForm(c) {
         $("backendUrl").value = c.backend_url || "";
         $("licenseKey").value = c.license_key || "";
         $("interval").value = c.interval_minutes || 30;
         $("logLevel").value = c.log_level || "info";
         $("autoUpdate").checked = !!c.auto_apply_updates;
+        skillDirs = Array.isArray(c.skill_dirs) ? c.skill_dirs.slice() : [];
+        renderDirs();
       }
 
-      function readForm() {
+      function renderDirs() {
+        const list = $("dirList");
+        list.innerHTML = "";
+        if (skillDirs.length === 0) {
+          const row = document.createElement("div");
+          row.className = "dir-item";
+          row.innerHTML = '<span class="path default">Par défaut : ' + defaultDir + "</span>";
+          list.appendChild(row);
+          return;
+        }
+        skillDirs.forEach((dir, i) => {
+          const row = document.createElement("div");
+          row.className = "dir-item";
+          const path = document.createElement("span");
+          path.className = "path";
+          path.textContent = dir;
+          const rm = document.createElement("button");
+          rm.className = "rm";
+          rm.title = "Retirer";
+          rm.textContent = "×";
+          rm.addEventListener("click", () => { skillDirs.splice(i, 1); renderDirs(); });
+          row.appendChild(path);
+          row.appendChild(rm);
+          list.appendChild(row);
+        });
+      }
+
+      function readConfigForm() {
         return {
           ...currentConfig,
           backend_url: $("backendUrl").value.trim(),
@@ -198,32 +286,68 @@
           interval_minutes: Math.max(1, parseInt($("interval").value, 10) || 30),
           log_level: $("logLevel").value,
           auto_apply_updates: $("autoUpdate").checked,
+          skill_dirs: skillDirs.slice(),
         };
       }
 
-      function toast(msg) {
-        const t = $("toast");
-        t.textContent = msg;
-        t.classList.add("show");
-        setTimeout(() => t.classList.remove("show"), 1800);
-      }
+      $("addDirBtn").addEventListener("click", async () => {
+        try {
+          const dir = await invoke("pick_skill_dir");
+          if (dir && !skillDirs.includes(dir)) { skillDirs.push(dir); renderDirs(); }
+        } catch (e) { toast($("toast"), "Erreur : " + e, true); }
+      });
 
       $("saveBtn").addEventListener("click", async () => {
         try {
-          await invoke("save_config", { config: readForm() });
-          toast("Enregistré");
-        } catch (e) { toast("Erreur : " + e); }
+          currentConfig = readConfigForm();
+          await invoke("save_config", { config: currentConfig });
+          toast($("toast"), "Enregistré");
+        } catch (e) { toast($("toast"), "Erreur : " + e, true); }
       });
       $("syncBtn").addEventListener("click", async () => {
-        try { await invoke("sync_now"); toast("Synchronisation lancée"); }
-        catch (e) { toast("Erreur : " + e); }
+        try { await invoke("sync_now"); toast($("toast"), "Synchronisation lancée"); }
+        catch (e) { toast($("toast"), "Erreur : " + e, true); }
       });
       $("logsBtn").addEventListener("click", () => invoke("open_logs").catch(() => {}));
 
+      // ----- Activation view -----
+      $("activateBtn").addEventListener("click", async () => {
+        const url = $("actUrl").value.trim();
+        const key = $("actKey").value.trim();
+        if (!url || !key) { toast($("actToast"), "URL et clé requises", true); return; }
+        $("activateBtn").disabled = true;
+        try {
+          currentConfig = { ...currentConfig, backend_url: url, license_key: key };
+          await invoke("save_config", { config: currentConfig });
+          // Move to the full view now that we're activated.
+          fillConfigForm(currentConfig);
+          showView("config");
+        } catch (e) {
+          toast($("actToast"), "Erreur : " + e, true);
+        } finally {
+          $("activateBtn").disabled = false;
+        }
+      });
+
+      // ----- Boot -----
       async function boot() {
-        try { fillForm(await invoke("get_config")); } catch (e) {}
-        try { renderStatus(await invoke("get_status")); } catch (e) {}
+        try { defaultDir = await invoke("default_skill_dir"); } catch (e) {}
+        try {
+          currentConfig = await invoke("get_config");
+        } catch (e) { currentConfig = {}; }
+
+        if (isActivated(currentConfig)) {
+          fillConfigForm(currentConfig);
+          showView("config");
+          try { renderStatus(await invoke("get_status")); } catch (e) {}
+        } else {
+          // First run: only ask for URL (pre-filled) + key.
+          $("actUrl").value = currentConfig.backend_url || "";
+          showView("activation");
+          $("actKey").focus();
+        }
       }
+
       listen("status", (evt) => renderStatus(evt.payload));
       boot();
     </script>

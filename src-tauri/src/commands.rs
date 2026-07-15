@@ -2,6 +2,7 @@ use crate::state::AppState;
 use crate::status::AppStatus;
 use csm_core::config::AppConfig;
 use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::DialogExt;
 
 /// Return the latest status snapshot.
 #[tauri::command]
@@ -50,4 +51,24 @@ pub fn open_logs(app: AppHandle) -> Result<(), String> {
     tauri_plugin_opener::OpenerExt::opener(&app)
         .open_path(dir.to_string_lossy(), None::<&str>)
         .map_err(|e| e.to_string())
+}
+
+/// The default global skills directory (`~/.claude/skills`), shown in the UI as
+/// the fallback destination when no folder is configured.
+#[tauri::command]
+pub fn default_skill_dir() -> String {
+    csm_core::paths::global_skills_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+/// Open a native folder picker and return the chosen path, or `None` if
+/// cancelled. Used by the UI to add a skills destination directory.
+#[tauri::command]
+pub async fn pick_skill_dir(app: AppHandle) -> Option<String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_folder(move |picked| {
+        let _ = tx.send(picked);
+    });
+    rx.await.ok().flatten().map(|p| p.to_string())
 }

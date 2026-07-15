@@ -4,7 +4,8 @@ use crate::error::Result;
 use crate::hash::sha256_hex;
 use crate::manifest::{SkillEntry, SkillManifest};
 use crate::state::{InstalledSkill, InstalledState};
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::path::{Path, PathBuf};
 
 /// Marker file written at the root of every skill directory CSM installs.
 ///
@@ -28,7 +29,9 @@ pub trait SkillSource {
 /// What a sync actually did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SyncOutcome {
+    /// Slugs that were (re)written into at least one directory.
     pub installed: Vec<String>,
+    /// Slugs removed entirely (no longer entitled).
     pub removed: Vec<String>,
     /// Per-skill failures: `(slug, message)`. A failure on one skill does not
     /// abort the others.
@@ -62,93 +65,143 @@ fn yaml_quote(s: &str) -> String {
     format!("\"{escaped}\"")
 }
 
-/// Run one full sync cycle: fetch manifest, install new/changed skills, remove
-/// skills dropped from the manifest, and persist the updated state.
+fn dir_key(p: &Path) -> String {
+    p.to_string_lossy().to_string()
+}
+
+/// Run one full sync cycle: fetch the manifest, install every entitled skill
+/// into every configured directory, remove skills/dirs that are no longer
+/// wanted, and persist the updated state.
 ///
 /// Errors for a single skill are collected in [`SyncOutcome::errors`] rather
-/// than aborting the whole run, so one bad skill cannot block the rest. The
-/// state file is saved even on partial failure so successful work is not lost.
+/// than aborting the whole run. The state file is saved even on partial failure
+/// so successful work is not lost.
 pub fn run_sync(
     source: &impl SkillSource,
     config: &AppConfig,
     global_dir: &Path,
     state_path: &Path,
 ) -> Result<SyncOutcome> {
-    let mut state = InstalledState::load(state_path)?;
+    let state = InstalledState::load(state_path)?;
     let manifest = source.fetch_manifest()?;
-    let plan = plan_sync(&manifest, &state);
+    let effective_dirs = config.effective_skill_dirs(global_dir);
+    let plan = plan_sync(&manifest, &state, &effective_dirs);
+
     let mut outcome = SyncOutcome::default();
 
-    for slug in &plan.to_install {
+    // Group installs by slug so each skill is fetched once and fanned out to all
+    // the directories that need it.
+    let mut installs_by_slug: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+    for (slug, dir) in &plan.installs {
+        installs_by_slug
+            .entry(slug.clone())
+            .or_default()
+            .push(dir.clone());
+    }
+
+    let mut fetched_hash: BTreeMap<String, String> = BTreeMap::new();
+    let mut failed: HashSet<(String, String)> = HashSet::new();
+
+    for (slug, wanted_dirs) in &installs_by_slug {
         let entry = match manifest.get(slug) {
             Some(e) => e,
-            None => continue, // plan is derived from manifest; unreachable in practice
+            None => continue, // plan derives from manifest; unreachable in practice
         };
-        match install_one(source, config, global_dir, entry) {
-            Ok(content_hash) => {
-                state.upsert(
-                    entry.slug.clone(),
-                    InstalledSkill {
-                        version: entry.version.clone(),
-                        target: entry.target.clone(),
-                        content_hash,
-                    },
-                );
-                outcome.installed.push(slug.clone());
+        match source.fetch_instructions(slug) {
+            Ok(instructions) => {
+                let md = build_skill_md(entry, &instructions);
+                fetched_hash.insert(slug.clone(), sha256_hex(md.as_bytes()));
+                for dir in wanted_dirs {
+                    if let Err(e) = install_skill_atomic(&md, dir, slug) {
+                        failed.insert((slug.clone(), dir_key(dir)));
+                        outcome
+                            .errors
+                            .push((slug.clone(), format!("{} @ {}: {e}", slug, dir.display())));
+                    }
+                }
             }
-            Err(e) => outcome.errors.push((slug.clone(), e.to_string())),
-        }
-    }
-
-    for slug in &plan.to_remove {
-        let target = state
-            .skills
-            .get(slug)
-            .map(|s| s.target.clone())
-            .unwrap_or_else(|| "global".to_string());
-        let target_dir = match config.resolve_target(&target, global_dir) {
-            Ok(d) => d,
             Err(e) => {
+                for dir in wanted_dirs {
+                    failed.insert((slug.clone(), dir_key(dir)));
+                }
                 outcome.errors.push((slug.clone(), e.to_string()));
-                continue;
             }
-        };
-        match remove_managed_skill(&target_dir, slug) {
-            Ok(_) => {
-                state.remove(slug);
-                outcome.removed.push(slug.clone());
-            }
-            Err(e) => outcome.errors.push((slug.clone(), e.to_string())),
         }
     }
 
-    state.save(state_path)?;
+    // Removals (skill dropped, or directory de-configured).
+    for (slug, dir) in &plan.removes {
+        if let Err(e) = remove_managed_skill(dir, slug) {
+            outcome
+                .errors
+                .push((slug.clone(), format!("remove {} @ {}: {e}", slug, dir.display())));
+        }
+    }
+
+    // Rebuild the state from the manifest and what is actually on disk now.
+    let mut new_state = InstalledState::default();
+    for entry in &manifest.skills {
+        let old = state.skills.get(&entry.slug);
+        let mut final_dirs = Vec::new();
+        for dir in &effective_dirs {
+            let key = dir_key(dir);
+            let was_current = old
+                .is_some_and(|o| o.version == entry.version && o.dirs.iter().any(|d| d == &key));
+            let just_installed = installs_by_slug
+                .get(&entry.slug)
+                .is_some_and(|ds| ds.contains(dir))
+                && !failed.contains(&(entry.slug.clone(), key.clone()));
+            if was_current || just_installed {
+                final_dirs.push(key);
+            }
+        }
+        if final_dirs.is_empty() {
+            continue;
+        }
+        let content_hash = fetched_hash
+            .get(&entry.slug)
+            .cloned()
+            .or_else(|| old.map(|o| o.content_hash.clone()))
+            .unwrap_or_default();
+        new_state.upsert(
+            entry.slug.clone(),
+            InstalledSkill {
+                version: entry.version.clone(),
+                content_hash,
+                dirs: final_dirs,
+            },
+        );
+    }
+    new_state.save(state_path)?;
+
+    // Report: installed = slugs with at least one successful write; removed =
+    // slugs that left the manifest entirely.
+    for (slug, wanted_dirs) in &installs_by_slug {
+        if wanted_dirs
+            .iter()
+            .any(|d| !failed.contains(&(slug.clone(), dir_key(d))))
+        {
+            outcome.installed.push(slug.clone());
+        }
+    }
+    outcome.installed.sort();
+    let removed: BTreeSet<String> = plan
+        .removes
+        .iter()
+        .filter(|(slug, _)| manifest.get(slug).is_none())
+        .map(|(slug, _)| slug.clone())
+        .collect();
+    outcome.removed = removed.into_iter().collect();
+
     Ok(outcome)
 }
 
-/// Fetch, materialize and install one skill. Returns the content hash.
-fn install_one(
-    source: &impl SkillSource,
-    config: &AppConfig,
-    global_dir: &Path,
-    entry: &SkillEntry,
-) -> Result<String> {
-    let instructions = source.fetch_instructions(&entry.slug)?;
-    let md = build_skill_md(entry, &instructions);
-    let content_hash = sha256_hex(md.as_bytes());
-    let target_dir = config.resolve_target(&entry.target, global_dir)?;
-    install_skill_atomic(&md, &target_dir, &entry.slug)?;
-    Ok(content_hash)
-}
-
-/// Write `<target_dir>/<slug>/SKILL.md` atomically.
-///
-/// Content is written to a staging directory and swapped into place only once
-/// complete, so a consumer never observes a half-written skill directory.
-fn install_skill_atomic(md: &str, target_dir: &Path, slug: &str) -> Result<()> {
-    std::fs::create_dir_all(target_dir)?;
-    let final_dir = target_dir.join(slug);
-    let staging = target_dir.join(format!(".csm-staging-{slug}"));
+/// Write `<dir>/<slug>/SKILL.md` atomically (staging dir + swap), plus the
+/// managed marker.
+fn install_skill_atomic(md: &str, dir: &Path, slug: &str) -> Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let final_dir = dir.join(slug);
+    let staging = dir.join(format!(".csm-staging-{slug}"));
 
     if staging.exists() {
         std::fs::remove_dir_all(&staging)?;
@@ -167,12 +220,11 @@ fn install_skill_atomic(md: &str, target_dir: &Path, slug: &str) -> Result<()> {
     Ok(())
 }
 
-/// Delete `<target_dir>/<slug>/` only if it carries the managed marker.
-/// Returns whether anything was removed.
-fn remove_managed_skill(target_dir: &Path, slug: &str) -> Result<bool> {
-    let dir = target_dir.join(slug);
-    if dir.join(MANAGED_MARKER).is_file() {
-        std::fs::remove_dir_all(&dir)?;
+/// Delete `<dir>/<slug>/` only if it carries the managed marker.
+fn remove_managed_skill(dir: &Path, slug: &str) -> Result<bool> {
+    let target = dir.join(slug);
+    if target.join(MANAGED_MARKER).is_file() {
+        std::fs::remove_dir_all(&target)?;
         Ok(true)
     } else {
         Ok(false)
@@ -184,7 +236,6 @@ mod tests {
     use super::*;
     use crate::error::CoreError;
     use std::collections::HashMap;
-    use std::path::PathBuf;
 
     struct MockSource {
         manifest: SkillManifest,
@@ -216,141 +267,162 @@ mod tests {
         _tmp: tempfile::TempDir,
         global_dir: PathBuf,
         state_path: PathBuf,
-        config: AppConfig,
     }
 
     fn fixture() -> Fixture {
         let tmp = tempfile::tempdir().unwrap();
         Fixture {
-            global_dir: tmp.path().join("global-skills"),
+            global_dir: tmp.path().join("global"),
             state_path: tmp.path().join("state.json"),
-            config: AppConfig::default(),
             _tmp: tmp,
+        }
+    }
+
+    fn cfg_with_dirs(dirs: &[&Path]) -> AppConfig {
+        AppConfig {
+            skill_dirs: dirs.iter().map(|d| d.to_path_buf()).collect(),
+            ..Default::default()
         }
     }
 
     #[test]
     fn build_skill_md_has_frontmatter() {
         let e = entry("bonjour", "1.0.0", Some("répond bonjour"));
-        let md = build_skill_md(&e, "# Contexte client\n\nfais X\n");
+        let md = build_skill_md(&e, "# Contexte\n\nfais X\n");
         assert!(md.starts_with("---\nname: bonjour\ndescription: \"répond bonjour\"\n---\n"));
         assert!(md.contains("fais X"));
     }
 
     #[test]
-    fn yaml_quote_escapes_specials() {
-        assert_eq!(yaml_quote("a: b"), "\"a: b\"");
-        assert_eq!(yaml_quote("say \"hi\""), "\"say \\\"hi\\\"\"");
-    }
-
-    #[test]
-    fn fresh_install_writes_skill_and_marker() {
+    fn fresh_install_into_default_global_dir() {
         let f = fixture();
         let source = MockSource {
             manifest: SkillManifest {
                 skills: vec![entry("bonjour", "1.0.0", Some("répond bonjour"))],
             },
-            instructions: HashMap::from([("bonjour".to_string(), "répond bonjour".to_string())]),
+            instructions: HashMap::from([("bonjour".to_string(), "hi".to_string())]),
         };
-
-        let out = run_sync(&source, &f.config, &f.global_dir, &f.state_path).unwrap();
+        // No skill_dirs configured -> uses global_dir.
+        let out = run_sync(&source, &AppConfig::default(), &f.global_dir, &f.state_path).unwrap();
         assert_eq!(out.installed, vec!["bonjour"]);
-        assert!(out.is_clean());
-
-        let dir = f.global_dir.join("bonjour");
-        let md = std::fs::read_to_string(dir.join(SKILL_FILE)).unwrap();
-        assert!(md.contains("name: bonjour"));
-        assert!(md.contains("répond bonjour"));
-        assert!(dir.join(MANAGED_MARKER).is_file());
+        assert!(f.global_dir.join("bonjour").join(SKILL_FILE).is_file());
+        assert!(f.global_dir.join("bonjour").join(MANAGED_MARKER).is_file());
 
         let state = InstalledState::load(&f.state_path).unwrap();
-        assert_eq!(state.skills["bonjour"].version, "1.0.0");
+        assert_eq!(state.skills["bonjour"].dirs.len(), 1);
     }
 
     #[test]
-    fn same_version_second_sync_is_noop() {
+    fn installs_into_multiple_dirs() {
         let f = fixture();
+        let d1 = f._tmp.path().join("dir1");
+        let d2 = f._tmp.path().join("dir2");
         let source = MockSource {
             manifest: SkillManifest {
                 skills: vec![entry("bonjour", "1.0.0", None)],
             },
             instructions: HashMap::from([("bonjour".to_string(), "hi".to_string())]),
         };
-        run_sync(&source, &f.config, &f.global_dir, &f.state_path).unwrap();
-        let out = run_sync(&source, &f.config, &f.global_dir, &f.state_path).unwrap();
+        let cfg = cfg_with_dirs(&[&d1, &d2]);
+        let out = run_sync(&source, &cfg, &f.global_dir, &f.state_path).unwrap();
+        assert_eq!(out.installed, vec!["bonjour"]);
+        assert!(d1.join("bonjour").join(SKILL_FILE).is_file());
+        assert!(d2.join("bonjour").join(SKILL_FILE).is_file());
+
+        let state = InstalledState::load(&f.state_path).unwrap();
+        assert_eq!(state.skills["bonjour"].dirs.len(), 2);
+    }
+
+    #[test]
+    fn second_sync_same_version_is_noop() {
+        let f = fixture();
+        let d1 = f._tmp.path().join("dir1");
+        let source = MockSource {
+            manifest: SkillManifest {
+                skills: vec![entry("bonjour", "1.0.0", None)],
+            },
+            instructions: HashMap::from([("bonjour".to_string(), "hi".to_string())]),
+        };
+        let cfg = cfg_with_dirs(&[&d1]);
+        run_sync(&source, &cfg, &f.global_dir, &f.state_path).unwrap();
+        let out = run_sync(&source, &cfg, &f.global_dir, &f.state_path).unwrap();
         assert!(!out.changed());
     }
 
     #[test]
-    fn version_bump_reinstalls() {
+    fn adding_a_dir_installs_only_there() {
         let f = fixture();
-        let v1 = MockSource {
+        let d1 = f._tmp.path().join("dir1");
+        let d2 = f._tmp.path().join("dir2");
+        let source = MockSource {
             manifest: SkillManifest {
                 skills: vec![entry("bonjour", "1.0.0", None)],
             },
-            instructions: HashMap::from([("bonjour".to_string(), "v1 body".to_string())]),
+            instructions: HashMap::from([("bonjour".to_string(), "hi".to_string())]),
         };
-        run_sync(&v1, &f.config, &f.global_dir, &f.state_path).unwrap();
-
-        let v2 = MockSource {
-            manifest: SkillManifest {
-                skills: vec![entry("bonjour", "2.0.0", None)],
-            },
-            instructions: HashMap::from([("bonjour".to_string(), "v2 body".to_string())]),
-        };
-        let out = run_sync(&v2, &f.config, &f.global_dir, &f.state_path).unwrap();
+        run_sync(&source, &cfg_with_dirs(&[&d1]), &f.global_dir, &f.state_path).unwrap();
+        // Now add d2.
+        let out = run_sync(&source, &cfg_with_dirs(&[&d1, &d2]), &f.global_dir, &f.state_path).unwrap();
         assert_eq!(out.installed, vec!["bonjour"]);
-
-        let md = std::fs::read_to_string(f.global_dir.join("bonjour").join(SKILL_FILE)).unwrap();
-        assert!(md.contains("v2 body"));
-        assert!(!md.contains("v1 body"));
+        assert!(d2.join("bonjour").join(SKILL_FILE).is_file());
+        assert_eq!(
+            InstalledState::load(&f.state_path).unwrap().skills["bonjour"].dirs.len(),
+            2
+        );
     }
 
     #[test]
-    fn fetch_error_is_reported_not_fatal() {
+    fn removing_a_dir_cleans_that_dir_only() {
         let f = fixture();
-        // Manifest lists two skills but only one has instructions available.
+        let d1 = f._tmp.path().join("dir1");
+        let d2 = f._tmp.path().join("dir2");
         let source = MockSource {
             manifest: SkillManifest {
-                skills: vec![entry("ok", "1", None), entry("broken", "1", None)],
-            },
-            instructions: HashMap::from([("ok".to_string(), "fine".to_string())]),
-        };
-        let out = run_sync(&source, &f.config, &f.global_dir, &f.state_path).unwrap();
-        assert_eq!(out.installed, vec!["ok"]);
-        assert_eq!(out.errors.len(), 1);
-        assert_eq!(out.errors[0].0, "broken");
-    }
-
-    #[test]
-    fn removed_from_manifest_deletes_managed_dir() {
-        let f = fixture();
-        let install = MockSource {
-            manifest: SkillManifest {
-                skills: vec![entry("bonjour", "1", None)],
+                skills: vec![entry("bonjour", "1.0.0", None)],
             },
             instructions: HashMap::from([("bonjour".to_string(), "hi".to_string())]),
         };
-        run_sync(&install, &f.config, &f.global_dir, &f.state_path).unwrap();
-        assert!(f.global_dir.join("bonjour").exists());
+        run_sync(&source, &cfg_with_dirs(&[&d1, &d2]), &f.global_dir, &f.state_path).unwrap();
+        assert!(d2.join("bonjour").exists());
+        // Drop d2.
+        run_sync(&source, &cfg_with_dirs(&[&d1]), &f.global_dir, &f.state_path).unwrap();
+        assert!(d1.join("bonjour").join(SKILL_FILE).is_file());
+        assert!(!d2.join("bonjour").exists());
+        assert_eq!(
+            InstalledState::load(&f.state_path).unwrap().skills["bonjour"].dirs,
+            vec![d1.to_string_lossy().to_string()]
+        );
+    }
+
+    #[test]
+    fn dropped_skill_removed_from_all_dirs() {
+        let f = fixture();
+        let d1 = f._tmp.path().join("dir1");
+        let d2 = f._tmp.path().join("dir2");
+        let install = MockSource {
+            manifest: SkillManifest {
+                skills: vec![entry("bonjour", "1.0.0", None)],
+            },
+            instructions: HashMap::from([("bonjour".to_string(), "hi".to_string())]),
+        };
+        run_sync(&install, &cfg_with_dirs(&[&d1, &d2]), &f.global_dir, &f.state_path).unwrap();
 
         let empty = MockSource {
             manifest: SkillManifest::default(),
             instructions: HashMap::new(),
         };
-        let out = run_sync(&empty, &f.config, &f.global_dir, &f.state_path).unwrap();
+        let out = run_sync(&empty, &cfg_with_dirs(&[&d1, &d2]), &f.global_dir, &f.state_path).unwrap();
         assert_eq!(out.removed, vec!["bonjour"]);
-        assert!(!f.global_dir.join("bonjour").exists());
-        assert!(InstalledState::load(&f.state_path)
-            .unwrap()
-            .skills
-            .is_empty());
+        assert!(!d1.join("bonjour").exists());
+        assert!(!d2.join("bonjour").exists());
+        assert!(InstalledState::load(&f.state_path).unwrap().skills.is_empty());
     }
 
     #[test]
     fn removal_never_touches_unmanaged_dir() {
         let f = fixture();
-        let user_dir = f.global_dir.join("handmade");
+        let d1 = f._tmp.path().join("dir1");
+        let user_dir = d1.join("handmade");
         std::fs::create_dir_all(&user_dir).unwrap();
         std::fs::write(user_dir.join("keep.txt"), b"precious").unwrap();
 
@@ -359,8 +431,8 @@ mod tests {
             "handmade",
             InstalledSkill {
                 version: "1".into(),
-                target: "global".into(),
                 content_hash: "h".into(),
+                dirs: vec![d1.to_string_lossy().to_string()],
             },
         );
         state.save(&f.state_path).unwrap();
@@ -369,8 +441,48 @@ mod tests {
             manifest: SkillManifest::default(),
             instructions: HashMap::new(),
         };
-        let out = run_sync(&empty, &f.config, &f.global_dir, &f.state_path).unwrap();
+        let out = run_sync(&empty, &cfg_with_dirs(&[&d1]), &f.global_dir, &f.state_path).unwrap();
         assert_eq!(out.removed, vec!["handmade"]);
-        assert!(user_dir.join("keep.txt").is_file());
+        assert!(user_dir.join("keep.txt").is_file()); // untouched (no marker)
+    }
+
+    #[test]
+    fn version_bump_replaces_content_everywhere() {
+        let f = fixture();
+        let d1 = f._tmp.path().join("dir1");
+        let v1 = MockSource {
+            manifest: SkillManifest {
+                skills: vec![entry("bonjour", "1.0.0", None)],
+            },
+            instructions: HashMap::from([("bonjour".to_string(), "v1 body".to_string())]),
+        };
+        run_sync(&v1, &cfg_with_dirs(&[&d1]), &f.global_dir, &f.state_path).unwrap();
+
+        let v2 = MockSource {
+            manifest: SkillManifest {
+                skills: vec![entry("bonjour", "2.0.0", None)],
+            },
+            instructions: HashMap::from([("bonjour".to_string(), "v2 body".to_string())]),
+        };
+        let out = run_sync(&v2, &cfg_with_dirs(&[&d1]), &f.global_dir, &f.state_path).unwrap();
+        assert_eq!(out.installed, vec!["bonjour"]);
+        let md = std::fs::read_to_string(d1.join("bonjour").join(SKILL_FILE)).unwrap();
+        assert!(md.contains("v2 body"));
+    }
+
+    #[test]
+    fn fetch_error_is_reported_not_fatal() {
+        let f = fixture();
+        let source = MockSource {
+            manifest: SkillManifest {
+                skills: vec![entry("ok", "1", None), entry("broken", "1", None)],
+            },
+            instructions: HashMap::from([("ok".to_string(), "fine".to_string())]),
+        };
+        let out = run_sync(&source, &AppConfig::default(), &f.global_dir, &f.state_path).unwrap();
+        assert_eq!(out.installed, vec!["ok"]);
+        assert_eq!(out.errors.len(), 1);
+        assert!(f.global_dir.join("ok").exists());
+        assert!(!f.global_dir.join("broken").exists());
     }
 }

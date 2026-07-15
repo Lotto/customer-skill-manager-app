@@ -1,5 +1,6 @@
-use crate::error::{CoreError, Result};
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -10,16 +11,6 @@ pub const DEFAULT_INTERVAL_MINUTES: u64 = 30;
 /// has to enter their license key.
 pub const DEFAULT_BACKEND_URL: &str =
     "https://hikyqslxoakwubxzdejd.supabase.co/functions/v1/skill-resource";
-
-/// A named destination directory that skills can be installed into.
-///
-/// The manifest refers to targets by name (e.g. `"global"` or `"acme-project"`);
-/// the config maps each name to an absolute path on this machine.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TargetDir {
-    pub name: String,
-    pub path: PathBuf,
-}
 
 /// The on-disk application configuration (TOML in the app-data directory).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -35,8 +26,10 @@ pub struct AppConfig {
     pub log_level: String,
     /// Whether to apply downloaded app updates automatically at next restart.
     pub auto_apply_updates: bool,
-    /// Extra named target directories (beyond the implicit `global`).
-    pub targets: Vec<TargetDir>,
+    /// Directories skills are installed into. Every entitled skill is written
+    /// to every directory in this list. When empty, the global default
+    /// (`~/.claude/skills`) is used.
+    pub skill_dirs: Vec<PathBuf>,
 }
 
 impl Default for AppConfig {
@@ -47,7 +40,7 @@ impl Default for AppConfig {
             interval_minutes: DEFAULT_INTERVAL_MINUTES,
             log_level: "info".to_string(),
             auto_apply_updates: false,
-            targets: Vec::new(),
+            skill_dirs: Vec::new(),
         }
     }
 }
@@ -89,19 +82,20 @@ impl AppConfig {
         !self.license_key.trim().is_empty() && !self.backend_url.trim().is_empty()
     }
 
-    /// Resolve a target name to an absolute directory.
+    /// The directories skills should be installed into.
     ///
-    /// The special name `"global"` resolves to `global_default` (typically
-    /// `~/.claude/skills`) unless the user has explicitly overridden it in
-    /// `targets`. Any other name must be declared in `targets`.
-    pub fn resolve_target(&self, name: &str, global_default: &Path) -> Result<PathBuf> {
-        if let Some(t) = self.targets.iter().find(|t| t.name == name) {
-            return Ok(t.path.clone());
+    /// Returns the configured [`AppConfig::skill_dirs`] (de-duplicated, order
+    /// preserved), or `[global_default]` when none are configured.
+    pub fn effective_skill_dirs(&self, global_default: &Path) -> Vec<PathBuf> {
+        if self.skill_dirs.is_empty() {
+            return vec![global_default.to_path_buf()];
         }
-        if name == "global" {
-            return Ok(global_default.to_path_buf());
-        }
-        Err(CoreError::UnknownTarget(name.to_string()))
+        let mut seen = HashSet::new();
+        self.skill_dirs
+            .iter()
+            .filter(|d| seen.insert((*d).clone()))
+            .cloned()
+            .collect()
     }
 }
 
@@ -163,10 +157,7 @@ mod tests {
             backend_url: "https://backend.example.com".into(),
             license_key: "abc-123".into(),
             interval_minutes: 15,
-            targets: vec![TargetDir {
-                name: "acme".into(),
-                path: PathBuf::from("/opt/acme/skills"),
-            }],
+            skill_dirs: vec![PathBuf::from("/opt/acme/skills")],
             ..Default::default()
         };
         c.save(&p).unwrap();
@@ -174,33 +165,26 @@ mod tests {
     }
 
     #[test]
-    fn global_resolves_to_default_when_not_overridden() {
+    fn effective_dirs_default_to_global() {
         let c = AppConfig::default();
         let def = PathBuf::from("/home/u/.claude/skills");
-        assert_eq!(c.resolve_target("global", &def).unwrap(), def);
+        assert_eq!(c.effective_skill_dirs(&def), vec![def]);
     }
 
     #[test]
-    fn global_can_be_overridden() {
-        let mut c = AppConfig::default();
-        c.targets.push(TargetDir {
-            name: "global".into(),
-            path: PathBuf::from("/custom/global"),
-        });
+    fn effective_dirs_use_configured_and_dedup() {
+        let c = AppConfig {
+            skill_dirs: vec![
+                PathBuf::from("/a"),
+                PathBuf::from("/b"),
+                PathBuf::from("/a"),
+            ],
+            ..Default::default()
+        };
         let def = PathBuf::from("/home/u/.claude/skills");
         assert_eq!(
-            c.resolve_target("global", &def).unwrap(),
-            PathBuf::from("/custom/global")
+            c.effective_skill_dirs(&def),
+            vec![PathBuf::from("/a"), PathBuf::from("/b")]
         );
-    }
-
-    #[test]
-    fn unknown_target_errors() {
-        let c = AppConfig::default();
-        let def = PathBuf::from("/home/u/.claude/skills");
-        assert!(matches!(
-            c.resolve_target("missing", &def),
-            Err(CoreError::UnknownTarget(_))
-        ));
     }
 }
