@@ -81,6 +81,10 @@ pub fn reload() -> Result<String, String> {
 /// works without a captured executable path).
 #[cfg(target_os = "windows")]
 fn launch_fresh() -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    /// Don't pop a console window for these helper subprocesses.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
     // Resolve the Store/app AUMID from the Start menu, then launch via explorer.
     let out = Command::new("powershell")
         .args([
@@ -88,6 +92,7 @@ fn launch_fresh() -> Result<(), String> {
             "-Command",
             "(Get-StartApps | Where-Object { $_.Name -eq 'Claude' } | Select-Object -First 1).AppID",
         ])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| e.to_string())?;
     let aumid = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -96,6 +101,7 @@ fn launch_fresh() -> Result<(), String> {
     }
     Command::new("explorer.exe")
         .arg(format!("shell:AppsFolder\\{aumid}"))
+        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map_err(|e| e.to_string())?;
     Ok(())
