@@ -49,9 +49,12 @@ pub fn reload() -> Result<String, String> {
         }
     }
 
+    // Not running: just launch it fresh.
     if pids.is_empty() {
-        return Err("Claude Desktop ne semble pas ouvert.".into());
+        launch_fresh()?;
+        return Ok("Claude Desktop lancé.".into());
     }
+
     let launch = main_exe
         .or(any_exe)
         .ok_or("Chemin de l'exécutable Claude Desktop introuvable.")?;
@@ -72,6 +75,48 @@ pub fn reload() -> Result<String, String> {
     Ok(format!(
         "Claude Desktop rechargé ({killed} processus arrêté·s)."
     ))
+}
+
+/// Launch Claude Desktop when no instance is running, by app identity (so it
+/// works without a captured executable path).
+#[cfg(target_os = "windows")]
+fn launch_fresh() -> Result<(), String> {
+    // Resolve the Store/app AUMID from the Start menu, then launch via explorer.
+    let out = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "(Get-StartApps | Where-Object { $_.Name -eq 'Claude' } | Select-Object -First 1).AppID",
+        ])
+        .output()
+        .map_err(|e| e.to_string())?;
+    let aumid = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if aumid.is_empty() {
+        return Err("Claude Desktop est introuvable sur ce système.".into());
+    }
+    Command::new("explorer.exe")
+        .arg(format!("shell:AppsFolder\\{aumid}"))
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn launch_fresh() -> Result<(), String> {
+    Command::new("open")
+        .args(["-a", "Claude"])
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn launch_fresh() -> Result<(), String> {
+    // Try the packaged launcher (never the `claude` CLI).
+    Command::new("claude-desktop")
+        .spawn()
+        .map_err(|_| "Claude Desktop est introuvable sur ce système.".to_string())?;
+    Ok(())
 }
 
 /// Heuristic: is this executable path the Claude **Desktop** GUI app?

@@ -24,7 +24,8 @@ pub struct AppConfig {
     pub interval_minutes: u64,
     /// `tracing` log level: error | warn | info | debug | trace.
     pub log_level: String,
-    /// Whether to apply downloaded app updates automatically at next restart.
+    /// Whether to apply downloaded app updates automatically (install + restart
+    /// right after a sync, never mid-write). Enabled by default.
     pub auto_apply_updates: bool,
     /// Whether to also publish skills into Claude Desktop's skill store so they
     /// appear in Desktop's *Customize → Skills* panel.
@@ -42,7 +43,7 @@ impl Default for AppConfig {
             license_key: String::new(),
             interval_minutes: DEFAULT_INTERVAL_MINUTES,
             log_level: "info".to_string(),
-            auto_apply_updates: false,
+            auto_apply_updates: true,
             sync_to_desktop: true,
             skill_dirs: Vec::new(),
         }
