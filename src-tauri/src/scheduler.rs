@@ -138,7 +138,11 @@ fn run_blocking(cfg: AppConfig, state_path: std::path::PathBuf) -> csm_core::Res
 
 /// Mirror the entitled skills into Claude Desktop's skill store(s), if any are
 /// present on this machine. Best-effort: failures are logged, never fatal.
-fn mirror_to_desktop(cfg: &AppConfig, global_dir: &std::path::Path, outcome: &csm_core::sync::SyncOutcome) {
+fn mirror_to_desktop(
+    cfg: &AppConfig,
+    global_dir: &std::path::Path,
+    outcome: &csm_core::sync::SyncOutcome,
+) {
     let Some(roaming) = dirs::config_dir() else {
         return;
     };

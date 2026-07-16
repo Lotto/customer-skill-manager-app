@@ -134,9 +134,10 @@ pub fn run_sync(
     // Removals (skill dropped, or directory de-configured).
     for (slug, dir) in &plan.removes {
         if let Err(e) = remove_managed_skill(dir, slug) {
-            outcome
-                .errors
-                .push((slug.clone(), format!("remove {} @ {}: {e}", slug, dir.display())));
+            outcome.errors.push((
+                slug.clone(),
+                format!("remove {} @ {}: {e}", slug, dir.display()),
+            ));
         }
     }
 
@@ -147,8 +148,8 @@ pub fn run_sync(
         let mut final_dirs = Vec::new();
         for dir in &effective_dirs {
             let key = dir_key(dir);
-            let was_current = old
-                .is_some_and(|o| o.version == entry.version && o.dirs.iter().any(|d| d == &key));
+            let was_current =
+                old.is_some_and(|o| o.version == entry.version && o.dirs.iter().any(|d| d == &key));
             let just_installed = installs_by_slug
                 .get(&entry.slug)
                 .is_some_and(|ds| ds.contains(dir))
@@ -363,13 +364,27 @@ mod tests {
             },
             instructions: HashMap::from([("bonjour".to_string(), "hi".to_string())]),
         };
-        run_sync(&source, &cfg_with_dirs(&[&d1]), &f.global_dir, &f.state_path).unwrap();
+        run_sync(
+            &source,
+            &cfg_with_dirs(&[&d1]),
+            &f.global_dir,
+            &f.state_path,
+        )
+        .unwrap();
         // Now add d2.
-        let out = run_sync(&source, &cfg_with_dirs(&[&d1, &d2]), &f.global_dir, &f.state_path).unwrap();
+        let out = run_sync(
+            &source,
+            &cfg_with_dirs(&[&d1, &d2]),
+            &f.global_dir,
+            &f.state_path,
+        )
+        .unwrap();
         assert_eq!(out.installed, vec!["bonjour"]);
         assert!(d2.join("bonjour").join(SKILL_FILE).is_file());
         assert_eq!(
-            InstalledState::load(&f.state_path).unwrap().skills["bonjour"].dirs.len(),
+            InstalledState::load(&f.state_path).unwrap().skills["bonjour"]
+                .dirs
+                .len(),
             2
         );
     }
@@ -385,10 +400,22 @@ mod tests {
             },
             instructions: HashMap::from([("bonjour".to_string(), "hi".to_string())]),
         };
-        run_sync(&source, &cfg_with_dirs(&[&d1, &d2]), &f.global_dir, &f.state_path).unwrap();
+        run_sync(
+            &source,
+            &cfg_with_dirs(&[&d1, &d2]),
+            &f.global_dir,
+            &f.state_path,
+        )
+        .unwrap();
         assert!(d2.join("bonjour").exists());
         // Drop d2.
-        run_sync(&source, &cfg_with_dirs(&[&d1]), &f.global_dir, &f.state_path).unwrap();
+        run_sync(
+            &source,
+            &cfg_with_dirs(&[&d1]),
+            &f.global_dir,
+            &f.state_path,
+        )
+        .unwrap();
         assert!(d1.join("bonjour").join(SKILL_FILE).is_file());
         assert!(!d2.join("bonjour").exists());
         assert_eq!(
@@ -408,17 +435,32 @@ mod tests {
             },
             instructions: HashMap::from([("bonjour".to_string(), "hi".to_string())]),
         };
-        run_sync(&install, &cfg_with_dirs(&[&d1, &d2]), &f.global_dir, &f.state_path).unwrap();
+        run_sync(
+            &install,
+            &cfg_with_dirs(&[&d1, &d2]),
+            &f.global_dir,
+            &f.state_path,
+        )
+        .unwrap();
 
         let empty = MockSource {
             manifest: SkillManifest::default(),
             instructions: HashMap::new(),
         };
-        let out = run_sync(&empty, &cfg_with_dirs(&[&d1, &d2]), &f.global_dir, &f.state_path).unwrap();
+        let out = run_sync(
+            &empty,
+            &cfg_with_dirs(&[&d1, &d2]),
+            &f.global_dir,
+            &f.state_path,
+        )
+        .unwrap();
         assert_eq!(out.removed, vec!["bonjour"]);
         assert!(!d1.join("bonjour").exists());
         assert!(!d2.join("bonjour").exists());
-        assert!(InstalledState::load(&f.state_path).unwrap().skills.is_empty());
+        assert!(InstalledState::load(&f.state_path)
+            .unwrap()
+            .skills
+            .is_empty());
     }
 
     #[test]

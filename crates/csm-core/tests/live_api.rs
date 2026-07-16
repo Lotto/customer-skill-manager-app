@@ -76,12 +76,18 @@ fn live_full_sync_materializes_skills() {
         assert!(skill_md.is_file(), "missing SKILL.md for {slug}");
         assert!(marker.is_file(), "missing managed marker for {slug}");
         let body = std::fs::read_to_string(&skill_md).unwrap();
-        assert!(body.starts_with("---\nname: "), "missing frontmatter for {slug}");
+        assert!(
+            body.starts_with("---\nname: "),
+            "missing frontmatter for {slug}"
+        );
         println!("\n===== {slug} =====\n{body}");
     }
 
     // A second sync with no version changes must be a clean no-op.
     let again = run_sync(&src, &cfg, &target, &state).expect("second sync");
-    assert!(!again.changed(), "second sync unexpectedly changed something");
+    assert!(
+        !again.changed(),
+        "second sync unexpectedly changed something"
+    );
     println!("\nSecond sync was a no-op (idempotent).");
 }

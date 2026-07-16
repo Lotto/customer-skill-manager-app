@@ -98,7 +98,11 @@ mod tests {
 
     #[test]
     fn empty_is_noop() {
-        let plan = plan_sync(&SkillManifest::default(), &InstalledState::default(), &dirs(&["/a"]));
+        let plan = plan_sync(
+            &SkillManifest::default(),
+            &InstalledState::default(),
+            &dirs(&["/a"]),
+        );
         assert!(plan.is_noop());
     }
 

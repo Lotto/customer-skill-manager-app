@@ -182,7 +182,9 @@ fn apply_plugin(
             // otherwise borrow whatever id Desktop uses for the uploads bucket.
             plugins
                 .iter()
-                .find(|p| p.get("marketplaceName").and_then(|v| v.as_str()) == Some(MARKETPLACE_NAME))
+                .find(|p| {
+                    p.get("marketplaceName").and_then(|v| v.as_str()) == Some(MARKETPLACE_NAME)
+                })
                 .and_then(|p| p.get("marketplaceId").and_then(|v| v.as_str()))
         })
         .unwrap_or(MARKETPLACE_ID_FALLBACK)
@@ -330,8 +332,11 @@ mod tests {
         std::fs::create_dir_all(&rpm).unwrap();
         std::fs::write(rpm.join("manifest.json"), "{}").unwrap();
         // skills-plugin is skipped.
-        std::fs::create_dir_all(tmp.path().join("Claude/local-agent-mode-sessions/skills-plugin/a/b"))
-            .unwrap();
+        std::fs::create_dir_all(
+            tmp.path()
+                .join("Claude/local-agent-mode-sessions/skills-plugin/a/b"),
+        )
+        .unwrap();
         assert_eq!(discover_rpm_stores(tmp.path()), vec![rpm]);
     }
 
@@ -339,9 +344,18 @@ mod tests {
     fn creates_plugin_folder_and_registers_it() {
         let (_t, rpm, src) = setup();
         let m = SkillManifest {
-            skills: vec![entry("bonjour", "répond bonjour"), entry("bye", "répond bye")],
+            skills: vec![
+                entry("bonjour", "répond bonjour"),
+                entry("bye", "répond bye"),
+            ],
         };
-        let out = sync_desktop(&m, &src, std::slice::from_ref(&rpm), 100, "2026-07-16T00:00:00Z");
+        let out = sync_desktop(
+            &m,
+            &src,
+            std::slice::from_ref(&rpm),
+            100,
+            "2026-07-16T00:00:00Z",
+        );
         assert_eq!(out.stores, 1);
         assert_eq!(out.installed, 2);
 
@@ -382,10 +396,15 @@ mod tests {
         sync_desktop(&m, &src, std::slice::from_ref(&rpm), 1, "t");
         // Updated in place: still one "customer-skills" entry, keeping the server id.
         let ps = plugins(&rpm);
-        let ours: Vec<_> = ps.iter().filter(|p| p["name"] == "customer-skills").collect();
+        let ours: Vec<_> = ps
+            .iter()
+            .filter(|p| p["name"] == "customer-skills")
+            .collect();
         assert_eq!(ours.len(), 1);
         assert_eq!(ours[0]["id"], "plugin_SERVER123");
-        assert!(rpm.join("plugin_SERVER123/skills/bonjour/SKILL.md").is_file());
+        assert!(rpm
+            .join("plugin_SERVER123/skills/bonjour/SKILL.md")
+            .is_file());
     }
 
     #[test]

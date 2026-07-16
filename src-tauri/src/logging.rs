@@ -16,7 +16,11 @@ pub fn init(paths: &AppPaths, level: &str) -> tracing_appender::non_blocking::Wo
     // and silence the updater plugin's own ERROR log for the expected
     // "no release yet / endpoint 404" case (our own updater module logs the
     // outcome at a sane level instead).
-    let base = if level.trim().is_empty() { "info" } else { level };
+    let base = if level.trim().is_empty() {
+        "info"
+    } else {
+        level
+    };
     let directive = format!("{base},tauri_plugin_updater=off");
     let filter = EnvFilter::try_new(&directive)
         .or_else(|_| EnvFilter::try_from_default_env())

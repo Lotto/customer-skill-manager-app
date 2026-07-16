@@ -24,9 +24,7 @@ pub struct CleanupOutcome {
 
 impl CleanupOutcome {
     pub fn did_anything(&self) -> bool {
-        !self.removed_dirs.is_empty()
-            || self.removed_marketplace_entry
-            || self.removed_plugin_entry
+        !self.removed_dirs.is_empty() || self.removed_marketplace_entry || self.removed_plugin_entry
     }
 }
 
@@ -137,19 +135,24 @@ mod tests {
 
         let plugins = claude.join("plugins");
         assert!(!plugins.join("cache").join(LEGACY_MARKETPLACE).exists());
-        assert!(!plugins.join("marketplaces").join(LEGACY_MARKETPLACE).exists());
+        assert!(!plugins
+            .join("marketplaces")
+            .join(LEGACY_MARKETPLACE)
+            .exists());
         assert!(plugins.join("cache/keep-me").exists());
         assert!(plugins.join("marketplaces/keep-me").exists());
 
-        let km: Value =
-            serde_json::from_str(&std::fs::read_to_string(plugins.join("known_marketplaces.json")).unwrap())
-                .unwrap();
+        let km: Value = serde_json::from_str(
+            &std::fs::read_to_string(plugins.join("known_marketplaces.json")).unwrap(),
+        )
+        .unwrap();
         assert!(km.get(LEGACY_MARKETPLACE).is_none());
         assert!(km.get("claude-plugins-official").is_some());
 
-        let ip: Value =
-            serde_json::from_str(&std::fs::read_to_string(plugins.join("installed_plugins.json")).unwrap())
-                .unwrap();
+        let ip: Value = serde_json::from_str(
+            &std::fs::read_to_string(plugins.join("installed_plugins.json")).unwrap(),
+        )
+        .unwrap();
         assert!(ip["plugins"].get(LEGACY_PLUGIN_KEY).is_none());
         assert!(ip["plugins"].get("figma@claude-plugins-official").is_some());
     }
