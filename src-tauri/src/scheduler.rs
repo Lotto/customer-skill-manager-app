@@ -142,9 +142,9 @@ fn mirror_to_desktop(cfg: &AppConfig, global_dir: &std::path::Path, outcome: &cs
     let Some(roaming) = dirs::config_dir() else {
         return;
     };
-    let stores = csm_core::desktop::discover_desktop_stores(&roaming);
+    let stores = csm_core::desktop::discover_rpm_stores(&roaming);
     if stores.is_empty() {
-        tracing::debug!("no Claude Desktop skill store found; skipping desktop sync");
+        tracing::debug!("no Claude Desktop plugin store found; skipping desktop sync");
         return;
     }
     let read_dir = cfg
