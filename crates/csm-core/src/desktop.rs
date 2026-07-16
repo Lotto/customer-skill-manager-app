@@ -18,6 +18,8 @@ use std::path::{Path, PathBuf};
 
 /// The plugin the app manages in Desktop's store.
 pub const PLUGIN_NAME: &str = "customer-skills";
+/// The deprecated plugin to uninstall from Desktop's store.
+const LEGACY_PLUGIN_NAME: &str = "csm-loader";
 /// Stable plugin id used when the plugin isn't already registered.
 const PLUGIN_ID_FALLBACK: &str = "plugin_csm_customer_skills";
 /// Marketplace the plugin is filed under (same bucket Desktop uses for uploads).
@@ -39,6 +41,8 @@ pub struct DesktopOutcome {
     pub stores: usize,
     pub installed: usize,
     pub removed: usize,
+    /// Number of stores the legacy `csm-loader` plugin was removed from.
+    pub legacy_removed: usize,
     pub errors: Vec<(String, String)>,
 }
 
@@ -97,6 +101,10 @@ pub fn sync_desktop(
 
     let mut outcome = DesktopOutcome::default();
     for store in rpm_stores {
+        // Uninstall the deprecated csm-loader plugin, best-effort.
+        if remove_legacy_plugin(store).unwrap_or(false) {
+            outcome.legacy_removed += 1;
+        }
         match apply_plugin(store, &desired, now_ms, now_iso) {
             Ok((installed, removed)) => {
                 outcome.stores += 1;
@@ -109,6 +117,38 @@ pub fn sync_desktop(
         }
     }
     outcome
+}
+
+/// Remove the deprecated `csm-loader` plugin (entry + folder) from an rpm store.
+/// Returns whether anything was removed.
+fn remove_legacy_plugin(rpm_dir: &Path) -> Result<bool> {
+    let manifest_path = rpm_dir.join("manifest.json");
+    let mut root: Value = serde_json::from_str(&std::fs::read_to_string(&manifest_path)?)?;
+    let Some(plugins) = root.get_mut("plugins").and_then(|v| v.as_array_mut()) else {
+        return Ok(false);
+    };
+
+    let mut removed = false;
+    let mut i = 0;
+    while i < plugins.len() {
+        if plugins[i].get("name").and_then(|v| v.as_str()) == Some(LEGACY_PLUGIN_NAME) {
+            if let Some(id) = plugins[i].get("id").and_then(|v| v.as_str()) {
+                let _ = std::fs::remove_dir_all(rpm_dir.join(id));
+            }
+            plugins.remove(i);
+            removed = true;
+        } else {
+            i += 1;
+        }
+    }
+
+    if removed {
+        let text = serde_json::to_string_pretty(&root)?;
+        let tmp = manifest_path.with_extension("json.tmp");
+        std::fs::write(&tmp, text)?;
+        std::fs::rename(&tmp, &manifest_path)?;
+    }
+    Ok(removed)
 }
 
 /// Write our plugin folder and upsert its `rpm/manifest.json` entry.
@@ -346,6 +386,36 @@ mod tests {
         assert_eq!(ours.len(), 1);
         assert_eq!(ours[0]["id"], "plugin_SERVER123");
         assert!(rpm.join("plugin_SERVER123/skills/bonjour/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn removes_legacy_csm_loader() {
+        let (_t, rpm, src) = setup();
+        // Add a legacy csm-loader plugin (entry + folder).
+        let mut root: Value =
+            serde_json::from_str(&std::fs::read_to_string(rpm.join("manifest.json")).unwrap())
+                .unwrap();
+        root["plugins"].as_array_mut().unwrap().push(json!({
+            "id": "plugin_legacy", "name": "csm-loader",
+            "marketplaceName": "customer-skill-manager-marketplace", "installedBy": "user"
+        }));
+        std::fs::write(
+            rpm.join("manifest.json"),
+            serde_json::to_string_pretty(&root).unwrap(),
+        )
+        .unwrap();
+        std::fs::create_dir_all(rpm.join("plugin_legacy/skills/csm-loader")).unwrap();
+
+        let m = SkillManifest {
+            skills: vec![entry("bonjour", "x")],
+        };
+        let out = sync_desktop(&m, &src, std::slice::from_ref(&rpm), 1, "t");
+        assert_eq!(out.legacy_removed, 1);
+        assert!(!rpm.join("plugin_legacy").exists());
+        assert!(!plugins(&rpm).iter().any(|p| p["name"] == "csm-loader"));
+        // Our plugin + the unrelated "data" plugin remain.
+        assert!(plugins(&rpm).iter().any(|p| p["name"] == "customer-skills"));
+        assert!(plugins(&rpm).iter().any(|p| p["name"] == "data"));
     }
 
     #[test]

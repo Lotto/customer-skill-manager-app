@@ -168,6 +168,7 @@ fn mirror_to_desktop(cfg: &AppConfig, global_dir: &std::path::Path, outcome: &cs
         stores = d.stores,
         installed = d.installed,
         removed = d.removed,
+        legacy_removed = d.legacy_removed,
         "mirrored skills to Claude Desktop"
     );
     for (store, err) in &d.errors {
